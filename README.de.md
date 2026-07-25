@@ -40,7 +40,11 @@ PenEcho ist offizielles Mitglied der **Kimi Open Source Friends**, einem Program
 
 ## Schnellstart
 
-Du benötigst [Node.js 18.17 oder neuer](https://nodejs.org/) und eine der folgenden Optionen: einen API-Schlüssel, eine authentifizierte [Codex CLI](https://developers.openai.com/codex/cli) oder eine authentifizierte [Claude Code CLI](https://code.claude.com/docs/en/overview).
+### Desktop-App
+
+[Von GitHub Releases herunterladen](https://github.com/penecho/penecho/releases/latest).
+
+Für die Installation über npm benötigst du [Node.js 20.3 oder neuer](https://nodejs.org/) und eine der folgenden Optionen: einen API-Schlüssel, eine authentifizierte [Codex CLI](https://developers.openai.com/codex/cli) oder eine authentifizierte [Claude Code CLI](https://code.claude.com/docs/en/overview).
 
 ```bash
 npm install -g penecho

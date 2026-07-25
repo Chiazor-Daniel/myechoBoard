@@ -40,7 +40,11 @@ PenEcho は、[Moonshot AI](https://www.kimi.com/) が優れたオープンソ�
 
 ## クイックスタート
 
-[Node.js 18.17 以降](https://nodejs.org/)と、API キー、認証済みの [Codex CLI](https://developers.openai.com/codex/cli)、または認証済みの [Claude Code CLI](https://code.claude.com/docs/en/overview) のいずれかが必要です。
+### デスクトップアプリ
+
+[GitHub Releases からダウンロード](https://github.com/penecho/penecho/releases/latest)。
+
+npm でインストールする場合は、[Node.js 20.3 以降](https://nodejs.org/)と、API キー、認証済みの [Codex CLI](https://developers.openai.com/codex/cli)、または認証済みの [Claude Code CLI](https://code.claude.com/docs/en/overview) のいずれかが必要です。
 
 ```bash
 npm install -g penecho
