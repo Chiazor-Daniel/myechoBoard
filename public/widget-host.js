@@ -1,75 +1,42 @@
 "use strict";
 (() => {
-  const MAX_HTML_LENGTH = 40000,
-    MAX_COPY_TEXT_LENGTH = 16000,
+  const MAX_HTML_LENGTH = 200000,
+    MAX_PLUGIN_STYLES_LENGTH = 32000,
     MAX_SNAPSHOT_DIMENSION = 2400,
     MAX_SNAPSHOT_PIXELS = 4800000,
     MAX_SNAPSHOT_DATA_URL_LENGTH = 28 * 1024 * 1024,
     SNAPSHOT_REQUEST_TIMEOUT_MS = 15000,
-    parentOrigin = location.origin,
+    UPDATE_FORWARD_INTERVAL_MS = 2000,
+    requestedParentOrigin = new URL(location.href).searchParams.get("parent-origin"),
+    parentOrigin = (() => {
+      try {
+        return new URL(requestedParentOrigin).origin === requestedParentOrigin ? requestedParentOrigin : location.origin;
+      } catch {
+        return location.origin;
+      }
+    })(),
     rendererUrl = new URL("widget-renderer.js", location.href).href,
     connect = new URL(location.href).searchParams.getAll("connect"),
-    inner = document.createElement("iframe"),
-    copySourceButton = document.querySelector("#widgetCopySource");
+    inner = document.createElement("iframe");
   let initialized = false,
     lastUpdate = 0,
     forwardedDragPointer = null,
     queuedDragMove = null,
     dragMoveFrame = 0,
-    widgetState = { selected:false, scaleX:1, scaleY:1 },
-    copySourceText = "";
+    innerDocumentUrl = null,
+    widgetState = { selected:false, active:true, scaleX:1, scaleY:1 };
   const pendingSnapshots = new Map();
 
-  inner.setAttribute("sandbox", "allow-scripts");
+  inner.setAttribute("sandbox", parentOrigin === location.origin ? "allow-scripts" : "allow-scripts allow-same-origin");
   inner.setAttribute("title", "Dynamic canvas widget");
-  document.body.append(inner);
-  copySourceButton.addEventListener("pointerdown", (event) => event.stopPropagation());
-  copySourceButton.addEventListener("click", async (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    if (!copySourceText) return;
-    let nativeCopy = null;
-    try {
-      nativeCopy = navigator.clipboard?.writeText ? navigator.clipboard.writeText(copySourceText) : null;
-    } catch {}
-    const field = document.createElement("textarea");
-    field.value = copySourceText;
-    field.setAttribute("readonly", "");
-    field.setAttribute("tabindex", "-1");
-    Object.assign(field.style, { position:"fixed", left:"-10000px", top:"0", opacity:"0" });
-    document.body.append(field);
-    try {
-      field.focus({ preventScroll:true });
-    } catch {
-      field.focus();
+  inner.addEventListener("load", () => {
+    if (innerDocumentUrl) {
+      URL.revokeObjectURL(innerDocumentUrl);
+      innerDocumentUrl = null;
     }
-    field.select();
-    field.setSelectionRange(0, field.value.length);
-    let copied = false;
-    try {
-      copied = Boolean(document.execCommand?.("copy"));
-    } catch {}
-    field.remove();
-    try {
-      copySourceButton.focus({ preventScroll:true });
-    } catch {
-      copySourceButton.focus();
-    }
-    if (nativeCopy) {
-      try {
-        await nativeCopy;
-        copied = true;
-      } catch {}
-    }
-    parent.postMessage({ type:"penecho-widget-copy-source-result", copied }, parentOrigin);
+    forwardWidgetState();
   });
-
-  function updateCopySourceScale() {
-    const scaleX = Math.max(.0001, Number(widgetState.scaleX) || 1),
-      scaleY = Math.max(.0001, Number(widgetState.scaleY) || 1);
-    copySourceButton.style.transform = `scale(${1 / scaleX},${1 / scaleY})`;
-  }
-
+  document.body.append(inner);
   function runtime() {
     const UPDATED = "penecho-widget-updated",
       DRAG_START = "penecho-widget-drag-start",
@@ -78,15 +45,52 @@
       TOUCH_START = "penecho-widget-touch-start",
       TOUCH_MOVE = "penecho-widget-touch-move",
       TOUCH_END = "penecho-widget-touch-end",
-      HOLD_MS = 500,
+      PAN_START = "penecho-widget-pan-start",
+      PAN_MOVE = "penecho-widget-pan-move",
+      PAN_END = "penecho-widget-pan-end",
+      WHEEL = "penecho-widget-wheel",
       MOVE_TOLERANCE_PX = 8,
       CONTROL_RADIUS_PX = 26,
       MAX_SNAPSHOT_DIMENSION = 2400,
       MAX_SNAPSHOT_PIXELS = 4800000;
-    let widgetState = { selected:false, scaleX:1, scaleY:1 },
-      suppressClickUntil = 0;
-    const presses = new Map();
+    let widgetState = { selected:false, active:true, scaleX:1, scaleY:1 },
+      suppressClickUntil = 0,
+      middlePan = null;
+    const presses = new Map(),
+      pausedAnimations = new WeakSet(),
+      pausedSvgRoots = new WeakSet(),
+      pendingAnimationFrames = new Map(),
+      nativeAnimationFrames = new Map(),
+      nativeRequestAnimationFrame = globalThis.requestAnimationFrame.bind(globalThis),
+      nativeCancelAnimationFrame = globalThis.cancelAnimationFrame.bind(globalThis);
+    let runtimeActive = true,
+      nextAnimationFrameId = 1;
     const clock = () => typeof performance === "object" && typeof performance.now === "function" ? performance.now() : Date.now();
+    function scheduleAnimationFrame(id) {
+      const callback = pendingAnimationFrames.get(id);
+      if (!callback || !runtimeActive || nativeAnimationFrames.has(id)) return;
+      const nativeId = nativeRequestAnimationFrame((timestamp) => {
+        nativeAnimationFrames.delete(id);
+        if (!runtimeActive || !pendingAnimationFrames.has(id)) return;
+        pendingAnimationFrames.delete(id);
+        callback(timestamp);
+      });
+      nativeAnimationFrames.set(id, nativeId);
+    }
+    globalThis.requestAnimationFrame = (callback) => {
+      if (typeof callback !== "function") throw new TypeError("requestAnimationFrame callback must be a function");
+      const id = nextAnimationFrameId++;
+      pendingAnimationFrames.set(id, callback);
+      scheduleAnimationFrame(id);
+      return id;
+    };
+    globalThis.cancelAnimationFrame = (id) => {
+      pendingAnimationFrames.delete(id);
+      const nativeId = nativeAnimationFrames.get(id);
+      if (nativeId === undefined) return;
+      nativeAnimationFrames.delete(id);
+      nativeCancelAnimationFrame(nativeId);
+    };
     function clearHoldTimer(press) {
       if (!press?.timer) return;
       clearTimeout(press.timer);
@@ -111,7 +115,7 @@
       return count;
     }
     function controlHit(clientX, clientY, pointerType) {
-      if (!widgetState.selected) return "move";
+      if (!widgetState.selected) return null;
       const radius = (pointerType === "touch" ? CONTROL_RADIUS_PX : 16),
         scaleX = Math.max(.0001, Number(widgetState.scaleX) || 1),
         scaleY = Math.max(.0001, Number(widgetState.scaleY) || 1),
@@ -123,7 +127,7 @@
           { hit:"width", distance:distance(width, height / 2) },
           { hit:"height", distance:distance(width / 2, height) },
         ].filter((item) => item.distance <= radius).sort((a, b) => a.distance - b.distance);
-      return controls[0]?.hit || "move";
+      return controls[0]?.hit || null;
     }
     function capturePointer(press) {
       if (press.captured) return;
@@ -167,8 +171,48 @@
       presses.delete(event.pointerId);
       if (![...presses.values()].some((item) => item.active)) document.documentElement.classList.remove("penecho-widget-dragging");
     }
+    function finishMiddlePan(event, cancelled = false) {
+      if (!middlePan || middlePan.pointerId !== event.pointerId) return false;
+      middlePan.clientX = Number(event.clientX);
+      middlePan.clientY = Number(event.clientY);
+      middlePan.screenX = Number(event.screenX);
+      middlePan.screenY = Number(event.screenY);
+      pointerMessage(PAN_END, { ...middlePan, cancelled });
+      try { document.documentElement.releasePointerCapture(middlePan.pointerId); } catch {}
+      middlePan = null;
+      document.documentElement.classList.remove("penecho-widget-dragging");
+      event.preventDefault?.();
+      event.stopImmediatePropagation?.();
+      return true;
+    }
     addEventListener("pointerdown", (event) => {
+      if (Number(event.button) === 1 && event.pointerType === "mouse" && !middlePan) {
+        middlePan = {
+          pointerId:event.pointerId,
+          pointerType:event.pointerType,
+          clientX:Number(event.clientX),
+          clientY:Number(event.clientY),
+          screenX:Number(event.screenX),
+          screenY:Number(event.screenY),
+          hit:"canvas-pan",
+        };
+        if (![middlePan.clientX, middlePan.clientY, middlePan.screenX, middlePan.screenY].every(Number.isFinite)) {
+          middlePan = null;
+          return;
+        }
+        try { document.documentElement.setPointerCapture(event.pointerId); } catch {}
+        document.documentElement.classList.add("penecho-widget-dragging");
+        pointerMessage(PAN_START, middlePan);
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
+      }
       if (presses.has(event.pointerId) || Number(event.button) !== 0 || !["mouse", "pen", "touch"].includes(event.pointerType)) return;
+      const hit = controlHit(Number(event.clientX), Number(event.clientY), event.pointerType);
+      if (event.pointerType !== "touch" && !hit) {
+        if (!widgetState.selected) parent.postMessage({ type:"penecho-widget-activate" }, "*");
+        return;
+      }
       const press = {
         pointerId:event.pointerId,
         pointerType:event.pointerType,
@@ -178,7 +222,7 @@
         startY:Number(event.screenY),
         screenX:Number(event.screenX),
         screenY:Number(event.screenY),
-        hit:controlHit(Number(event.clientX), Number(event.clientY), event.pointerType),
+        hit,
         active:false,
         navigation:false,
         captured:false,
@@ -190,13 +234,23 @@
         pointerMessage(TOUCH_START, press);
         if (touchCount() >= 2) cancelAllHoldsForNavigation();
       }
-      if (widgetState.selected && press.hit !== "move" && touchCount() < 2) {
+      if (press.hit && touchCount() < 2) {
         activateHold(press);
         event.preventDefault();
         event.stopImmediatePropagation();
-      } else if (!widgetState.selected && touchCount() < 2) press.timer = setTimeout(() => activateHold(press), HOLD_MS);
+      }
     }, { capture:true, passive:false });
     addEventListener("pointermove", (event) => {
+      if (middlePan?.pointerId === event.pointerId) {
+        middlePan.clientX = Number(event.clientX);
+        middlePan.clientY = Number(event.clientY);
+        middlePan.screenX = Number(event.screenX);
+        middlePan.screenY = Number(event.screenY);
+        if ([middlePan.clientX, middlePan.clientY, middlePan.screenX, middlePan.screenY].every(Number.isFinite)) pointerMessage(PAN_MOVE, middlePan);
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
+      }
       const press = presses.get(event.pointerId);
       if (!press) return;
       const clientX = Number(event.clientX), clientY = Number(event.clientY), screenX = Number(event.screenX), screenY = Number(event.screenY);
@@ -212,7 +266,7 @@
         return;
       }
       const moved = Math.hypot(screenX - press.startX, screenY - press.startY) > MOVE_TOLERANCE_PX;
-      if (press.pointerType === "touch" && (press.navigation || touchCount() >= 2 || (!widgetState.selected && moved))) {
+      if (press.pointerType === "touch" && (press.navigation || touchCount() >= 2)) {
         if (moved || touchCount() >= 2) {
           clearHoldTimer(press);
           press.navigation = true;
@@ -224,17 +278,19 @@
         }
         return;
       }
-      if (!moved) return;
-      clearHoldTimer(press);
-      if (widgetState.selected) {
-        activateHold(press);
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        pointerMessage(DRAG_MOVE, press);
-      } else presses.delete(event.pointerId);
     }, { capture:true, passive:false });
-    addEventListener("pointerup", (event) => finishPress(event), { capture:true, passive:false });
-    addEventListener("pointercancel", (event) => finishPress(event, true), { capture:true, passive:false });
+    addEventListener("pointerup", (event) => {
+      if (!finishMiddlePan(event)) finishPress(event);
+    }, { capture:true, passive:false });
+    addEventListener("pointercancel", (event) => {
+      if (!finishMiddlePan(event, true)) finishPress(event, true);
+    }, { capture:true, passive:false });
+    addEventListener("wheel", (event) => {
+      if (!Number.isFinite(event.deltaY) || !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) return;
+      parent.postMessage({ type:WHEEL, localX:event.clientX, localY:event.clientY, deltaY:event.deltaY }, "*");
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }, { capture:true, passive:false });
     addEventListener("click", (event) => {
       if (!suppressClickUntil || clock() > suppressClickUntil) {
         suppressClickUntil = 0;
@@ -251,6 +307,46 @@
     }, true);
     function notifyReady() {
       parent.postMessage({ type: UPDATED }, "*");
+    }
+    function setRuntimeActive(active) {
+      if (runtimeActive !== active) {
+        runtimeActive = active;
+        if (active) {
+          for (const id of pendingAnimationFrames.keys()) scheduleAnimationFrame(id);
+        } else {
+          for (const nativeId of nativeAnimationFrames.values()) nativeCancelAnimationFrame(nativeId);
+          nativeAnimationFrames.clear();
+        }
+      }
+      if (active) {
+        document.documentElement.classList.remove("penecho-widget-paused");
+        for (const animation of document.getAnimations()) {
+          if (!pausedAnimations.has(animation)) continue;
+          pausedAnimations.delete(animation);
+          try { animation.play(); } catch {}
+        }
+        for (const svg of document.querySelectorAll("svg")) {
+          if (!pausedSvgRoots.has(svg)) continue;
+          pausedSvgRoots.delete(svg);
+          try { svg.unpauseAnimations(); } catch {}
+        }
+        return;
+      }
+      for (const animation of document.getAnimations()) {
+        if (animation.playState !== "running") continue;
+        try {
+          animation.pause();
+          pausedAnimations.add(animation);
+        } catch {}
+      }
+      for (const svg of document.querySelectorAll("svg")) {
+        if (typeof svg.pauseAnimations !== "function" || svg.animationsPaused?.()) continue;
+        try {
+          svg.pauseAnimations();
+          pausedSvgRoots.add(svg);
+        } catch {}
+      }
+      document.documentElement.classList.add("penecho-widget-paused");
     }
     function inlineSvgComputedStyles() {
       const properties = [
@@ -334,9 +430,10 @@
     addEventListener("message", (event) => {
       if (event.source !== parent) return;
       if (event.data?.type === "penecho-widget-snapshot-request") void snapshot(event.data);
-      else if (event.data?.type === "penecho-widget-state" && typeof event.data.selected === "boolean"
+      else if (event.data?.type === "penecho-widget-state" && typeof event.data.selected === "boolean" && typeof event.data.active === "boolean"
         && Number.isFinite(event.data.scaleX) && event.data.scaleX > 0 && Number.isFinite(event.data.scaleY) && event.data.scaleY > 0) {
-        widgetState = { selected:event.data.selected, scaleX:event.data.scaleX, scaleY:event.data.scaleY };
+        widgetState = { selected:event.data.selected, active:event.data.active, scaleX:event.data.scaleX, scaleY:event.data.scaleY };
+        setRuntimeActive(widgetState.active);
       }
     });
     addEventListener("load", notifyReady, { once: true });
@@ -349,14 +446,135 @@
   }
 
   function csp() {
-    const origins = connect.length ? connect.join(" ") : "'none'";
-    const images = connect.length ? `data: blob: ${connect.join(" ")}` : "data: blob:";
-    return `default-src 'none'; script-src 'unsafe-inline' ${rendererUrl}; style-src 'unsafe-inline'; connect-src ${origins}; img-src ${images}; font-src 'none'; media-src 'none'; frame-src 'none'; worker-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'`;
+    return `default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' https: ${rendererUrl}; style-src 'unsafe-inline' https:; connect-src https:; img-src data: blob: https:; font-src data: https:; media-src data: blob: https:; frame-src 'none'; worker-src blob: https:; object-src 'none'; form-action 'none'; base-uri 'none'`;
   }
 
-  function widgetDocument(html) {
+  function safeHttpsResource(element, attribute) {
+    const value = element.getAttribute(attribute);
+    if (!value) return false;
+    try {
+      const url = new URL(value, location.href);
+      if (url.protocol !== "https:" || url.username || url.password) return false;
+      element.setAttribute(attribute, url.href);
+      element.setAttribute("referrerpolicy", "no-referrer");
+      if (["SCRIPT", "LINK", "IMG", "VIDEO", "AUDIO", "SOURCE"].includes(element.tagName)) element.setAttribute("crossorigin", "anonymous");
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function inlineScriptHasWindowBinding(source) {
+    const protectedNames = new Set([
+      "closed", "document", "event", "external", "frameElement", "frames", "history", "length",
+      "location", "name", "navigator", "opener", "origin", "parent", "self", "status", "top", "window",
+    ]);
+    let index = 0, parenDepth = 0, bracketDepth = 0, braceDepth = 0,
+      variableBase = null, expectsVariableName = false, expectsFunctionName = false;
+    const isIdentifierStart = char => /[A-Za-z_$]/.test(char),
+      isIdentifierPart = char => /[A-Za-z0-9_$]/.test(char);
+    while (index < source.length) {
+      const char = source[index], next = source[index + 1];
+      if (/\s/.test(char)) {
+        index++;
+        continue;
+      }
+      if (char === "/" && next === "/") {
+        index += 2;
+        while (index < source.length && source[index] !== "\n" && source[index] !== "\r") index++;
+        continue;
+      }
+      if (char === "/" && next === "*") {
+        index += 2;
+        while (index < source.length && !(source[index] === "*" && source[index + 1] === "/")) index++;
+        index = Math.min(source.length,index + 2);
+        continue;
+      }
+      if (char === "'" || char === '"' || char === "`") {
+        const quote = char;
+        index++;
+        while (index < source.length) {
+          if (source[index] === "\\") {
+            index += 2;
+            continue;
+          }
+          if (source[index++] === quote) break;
+        }
+        continue;
+      }
+      if (isIdentifierStart(char)) {
+        const start = index++;
+        while (index < source.length && isIdentifierPart(source[index])) index++;
+        const identifier = source.slice(start,index);
+        if (expectsFunctionName) {
+          if (protectedNames.has(identifier)) return true;
+          expectsFunctionName = false;
+        }
+        if (identifier === "function") {
+          expectsFunctionName = true;
+          continue;
+        }
+        if (identifier === "var") {
+          variableBase = { parenDepth, bracketDepth, braceDepth };
+          expectsVariableName = true;
+          continue;
+        }
+        if (variableBase && expectsVariableName) {
+          if (protectedNames.has(identifier)) return true;
+          expectsVariableName = false;
+        }
+        continue;
+      }
+      if (expectsFunctionName && char !== "*") expectsFunctionName = false;
+      if (char === "(") parenDepth++;
+      else if (char === ")") parenDepth = Math.max(0,parenDepth - 1);
+      else if (char === "[") bracketDepth++;
+      else if (char === "]") bracketDepth = Math.max(0,bracketDepth - 1);
+      else if (char === "{") braceDepth++;
+      else if (char === "}") braceDepth = Math.max(0,braceDepth - 1);
+      if (variableBase && parenDepth === variableBase.parenDepth && bracketDepth === variableBase.bracketDepth && braceDepth === variableBase.braceDepth) {
+        if (char === ",") expectsVariableName = true;
+        else if (char === ";") {
+          variableBase = null;
+          expectsVariableName = false;
+        }
+      }
+      index++;
+    }
+    return false;
+  }
+
+  function scopedInlineWidgetScript(source) {
+    const script = String(source || "");
+    return inlineScriptHasWindowBinding(script) ? `(() => {\n${script}\n})();` : script;
+  }
+
+  function widgetDocument(html, pluginStyles = "") {
     const parsed = new DOMParser().parseFromString(html, "text/html");
-    parsed.querySelectorAll("base, iframe, object, embed, form, link[rel='stylesheet'], meta[http-equiv], script[src]").forEach((element) => element.remove());
+    parsed.querySelectorAll("base, iframe, object, embed, form, meta[http-equiv]").forEach((element) => element.remove());
+    parsed.querySelectorAll("script[src]").forEach((element) => {
+      if (!safeHttpsResource(element, "src")) element.remove();
+    });
+    parsed.querySelectorAll("link").forEach((element) => {
+      if (String(element.getAttribute("rel") || "").toLowerCase() !== "stylesheet" || !safeHttpsResource(element, "href")) element.remove();
+    });
+    parsed.querySelectorAll("script:not([src])").forEach((element) => {
+      const type = String(element.getAttribute("type") || "").trim().toLowerCase().split(";",1)[0];
+      if (type && !["text/javascript", "application/javascript", "text/ecmascript", "application/ecmascript"].includes(type)) return;
+      const original = element.textContent || "",
+        scoped = scopedInlineWidgetScript(original);
+      if (scoped === original) return;
+      element.textContent = scoped;
+      element.dataset.penechoScopedWindowBindings = "";
+    });
+    parsed.querySelectorAll("img[src],video[src],audio[src],source[src]").forEach((element) => {
+      const value = element.getAttribute("src") || "";
+      if (/^(?:data:|blob:)/i.test(value)) {
+        element.setAttribute("referrerpolicy", "no-referrer");
+        return;
+      }
+      if (!safeHttpsResource(element, "src")) element.removeAttribute("src");
+    });
     const policy = parsed.createElement("meta");
     policy.httpEquiv = "Content-Security-Policy";
     policy.content = csp();
@@ -365,15 +583,21 @@
     viewport.name = "viewport";
     viewport.content = "width=device-width,initial-scale=1";
     parsed.head.prepend(viewport);
+    if (pluginStyles) {
+      const pluginStyle = parsed.createElement("style");
+      pluginStyle.dataset.penechoPluginStyles = "";
+      pluginStyle.textContent = pluginStyles;
+      parsed.head.append(pluginStyle);
+    }
     const bridgeStyle = parsed.createElement("style");
-    bridgeStyle.textContent = "html,body{background:transparent!important;color-scheme:light!important;touch-action:none!important;overscroll-behavior:contain}html.penecho-widget-dragging,html.penecho-widget-dragging *{cursor:grabbing!important;user-select:none!important}";
+    bridgeStyle.textContent = "html,body{background:transparent!important;color-scheme:light!important;touch-action:none!important;overscroll-behavior:contain}html.penecho-widget-dragging,html.penecho-widget-dragging *{cursor:grabbing!important;user-select:none!important}html.penecho-widget-paused *,html.penecho-widget-paused *::before,html.penecho-widget-paused *::after{animation-play-state:paused!important}";
     parsed.head.append(bridgeStyle);
     const renderer = parsed.createElement("script");
     renderer.src = rendererUrl;
     parsed.body.append(renderer);
     const bridge = parsed.createElement("script");
     bridge.textContent = `(${runtime.toString()})()`;
-    parsed.body.append(bridge);
+    policy.after(bridge);
     return `<!doctype html>\n${parsed.documentElement.outerHTML}`;
   }
 
@@ -381,7 +605,7 @@
     return message && ["penecho-widget-drag-start", "penecho-widget-drag-move", "penecho-widget-drag-end"].includes(message.type)
       && Number.isInteger(message.pointerId) && Math.abs(message.pointerId) <= 0x7fffffff
       && ["mouse", "pen", "touch"].includes(message.pointerType)
-      && ["move", "width", "height", "resize"].includes(message.hit)
+      && ["width", "height", "resize"].includes(message.hit)
       && [message.localX, message.localY, message.screenX, message.screenY].every(value => Number.isFinite(value) && Math.abs(value) <= 10000000);
   }
   function validTouchMessage(message) {
@@ -389,6 +613,13 @@
       && Number.isInteger(message.pointerId) && Math.abs(message.pointerId) <= 0x7fffffff
       && message.pointerType === "touch"
       && [message.localX, message.localY].every(value => Number.isFinite(value) && Math.abs(value) <= 10000000);
+  }
+  function validNavigationMessage(message) {
+    if (!message || !["penecho-widget-pan-start", "penecho-widget-pan-move", "penecho-widget-pan-end", "penecho-widget-wheel"].includes(message.type)) return false;
+    if (message.type === "penecho-widget-wheel")
+      return [message.localX, message.localY, message.deltaY].every(value => Number.isFinite(value) && Math.abs(value) <= 10000000);
+    return Number.isInteger(message.pointerId) && Math.abs(message.pointerId) <= 0x7fffffff && message.pointerType === "mouse"
+      && [message.localX, message.localY, message.screenX, message.screenY].every(value => Number.isFinite(value) && Math.abs(value) <= 10000000);
   }
   function forwardWidgetState() {
     inner.contentWindow?.postMessage({ type:"penecho-widget-state", ...widgetState }, "*");
@@ -424,24 +655,16 @@
     const message = event.data;
     if (event.source === parent && event.origin === parentOrigin) {
       if (message?.type === "penecho-widget-init") {
-        if (initialized || typeof message.html !== "string" || message.html.length > MAX_HTML_LENGTH) return;
-        if (message.copyText !== undefined && (typeof message.copyText !== "string" || !message.copyText.trim() || message.copyText.length > MAX_COPY_TEXT_LENGTH)) return;
-        if (message.copyLabel !== undefined && (typeof message.copyLabel !== "string" || !message.copyLabel.trim() || message.copyLabel.length > 80)) return;
+        if (typeof message.html !== "string" || message.html.length > MAX_HTML_LENGTH) return;
+        if (message.pluginStyles !== undefined && (typeof message.pluginStyles !== "string" || message.pluginStyles.length > MAX_PLUGIN_STYLES_LENGTH)) return;
         initialized = true;
         inner.title = String(message.title || "Dynamic canvas widget").slice(0, 120);
-        copySourceText = typeof message.copyText === "string" ? message.copyText.trim() : "";
-        copySourceButton.hidden = !copySourceText;
-        if (copySourceText) {
-          copySourceButton.textContent = String(message.copyLabel || "Copy source").trim();
-          copySourceButton.setAttribute("aria-label", copySourceButton.textContent);
-          copySourceButton.title = copySourceButton.textContent;
-          updateCopySourceScale();
-        }
-        inner.srcdoc = widgetDocument(message.html);
-      } else if (message?.type === "penecho-widget-state" && typeof message.selected === "boolean"
+        if (innerDocumentUrl) URL.revokeObjectURL(innerDocumentUrl);
+        innerDocumentUrl = URL.createObjectURL(new Blob([widgetDocument(message.html, message.pluginStyles || "")], { type:"text/html" }));
+        inner.src = innerDocumentUrl;
+      } else if (message?.type === "penecho-widget-state" && typeof message.selected === "boolean" && typeof message.active === "boolean"
         && Number.isFinite(message.scaleX) && message.scaleX > 0 && Number.isFinite(message.scaleY) && message.scaleY > 0) {
-        widgetState = { selected:message.selected, scaleX:message.scaleX, scaleY:message.scaleY };
-        updateCopySourceScale();
+        widgetState = { selected:message.selected, active:message.active, scaleX:message.scaleX, scaleY:message.scaleY };
         forwardWidgetState();
       } else if (message?.type === "penecho-widget-snapshot-request" && initialized) {
         const requestedWidth = Number(message.width), requestedHeight = Number(message.height);
@@ -456,7 +679,7 @@
     if (message.type === "penecho-widget-updated") {
       forwardWidgetState();
       const now = Date.now();
-      if (now - lastUpdate < 500) return;
+      if (now - lastUpdate < UPDATE_FORWARD_INTERVAL_MS) return;
       lastUpdate = now;
       parent.postMessage({ type: "penecho-widget-updated" }, parentOrigin);
     } else if (message.type === "penecho-widget-snapshot" && pendingSnapshots.has(message.requestId)) {
@@ -471,8 +694,10 @@
         parent.postMessage({ type:message.type, requestId:message.requestId, dataUrl:message.dataUrl, width:message.width, height:message.height }, parentOrigin);
       }
     } else if (message.type === "penecho-widget-snapshot-error" && pendingSnapshots.has(message.requestId)) snapshotError(message.requestId, "Widget content could not be rendered");
+    else if (message.type === "penecho-widget-activate") parent.postMessage({ type:message.type }, parentOrigin);
     else if (validDragMessage(message)) forwardDragMessage(message);
     else if (validTouchMessage(message)) parent.postMessage(message, parentOrigin);
+    else if (validNavigationMessage(message)) parent.postMessage(message, parentOrigin);
   });
 
   parent.postMessage({ type: "penecho-widget-host-ready" }, parentOrigin);

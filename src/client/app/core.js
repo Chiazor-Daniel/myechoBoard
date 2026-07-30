@@ -2,6 +2,7 @@
 (() => {
   const SIZE = 20000,
     TILE = 512,
+    INITIAL_VIEW_ZOOM = 1.5,
     EXPORT_MAX_DIMENSION = 16384,
     EXPORT_MAX_PIXELS = 64 * 1024 * 1024,
     MAX_ATLAS_WIDTH = 2048,
@@ -17,8 +18,12 @@
     animationLayer = document.querySelector("#animationLayer"),
     animationCtx = animationLayer.getContext("2d"),
     widgetLayer = document.querySelector("#widgetLayer"),
+    summonLayer = document.querySelector("#summonLayer"),
+    inkLayer = document.querySelector("#inkLayer"),
+    inkCtx = inkLayer.getContext("2d"),
     interactionLayer = document.querySelector("#interactionLayer"),
     interactionCtx = interactionLayer.getContext("2d"),
+    objectChromeLayer = document.querySelector("#objectChromeLayer"),
     animationControls = document.querySelector("#animationControls"),
     animationPlayPause = document.querySelector("#animationPlayPause"),
     animationRestart = document.querySelector("#animationRestart"),
@@ -41,6 +46,11 @@
     pluginTitle = document.querySelector("#pluginTitle"),
     pluginDocumentEditor = document.querySelector("#pluginDocumentEditor"),
     pluginDocumentBytes = document.querySelector("#pluginDocumentBytes"),
+    pluginStylesEditor = document.querySelector("#pluginStylesEditor"),
+    pluginStylesUploadButton = document.querySelector("#pluginStylesUploadButton"),
+    pluginStylesUpload = document.querySelector("#pluginStylesUpload"),
+    pluginStylesBytes = document.querySelector("#pluginStylesBytes"),
+    pluginStylesPreview = document.querySelector("#pluginStylesPreview"),
     pluginDocumentStatus = document.querySelector("#pluginDocumentStatus"),
     pluginImprove = document.querySelector("#pluginImprove"),
     pluginSave = document.querySelector("#pluginSave"),
@@ -57,6 +67,7 @@
     selectionDeleteButton = document.querySelector("#selectionDeleteBtn"),
     selectionCancelButton = document.querySelector("#selectionCancelBtn"),
     imagePickerButton = document.querySelector("#imagePickerBtn"),
+    clipboardCopyButton = document.querySelector("#clipboardCopyBtn"),
     imagePickerInput = document.querySelector("#imagePickerInput"),
     imageEditBar = document.querySelector("#imageEditBar"),
     imagePlaceButton = document.querySelector("#imagePlaceBtn"),
@@ -65,7 +76,6 @@
     textEditorLayer = document.querySelector("#textEditorLayer"),
     textInputHint = document.querySelector("#textInputHint"),
     tourMain = document.querySelector("main"),
-    tourReplayButton = document.querySelector("#tourReplayBtn"),
     tourLayer = document.querySelector("#tourLayer"),
     tourHighlight = document.querySelector("#tourHighlight"),
     tourCard = document.querySelector("#tourCard"),
@@ -81,7 +91,16 @@
     changelogLayer = document.querySelector("#changelogLayer"),
     changelogDialog = document.querySelector("#changelogDialog"),
     changelogCloseButton = document.querySelector("#changelogClose"),
-    changelogDoneButton = document.querySelector("#changelogDone");
+    changelogDoneButton = document.querySelector("#changelogDone"),
+    settingsLayer = document.querySelector("#settingsLayer"),
+    settingsBackdrop = document.querySelector("#settingsBackdrop"),
+    settingsPanel = document.querySelector("#settingsPanel"),
+    settingsButton = document.querySelector("#settingsBtn"),
+    settingsCloseButton = document.querySelector("#settingsClose"),
+    settingsAutoToggle = document.querySelector("#settingsAutoToggle"),
+    summonToggle = document.querySelector("#summonToggle"),
+    settingsTourButton = document.querySelector("#settingsTourBtn"),
+    settingsChangelogButton = document.querySelector("#settingsChangelogBtn");
   const ZH = window.PENECHO_LOCALES?.zh || {};
   const DRAW = window.PENECHO_DRAW;
   const SELECT = window.PENECHO_SELECTION;
@@ -89,6 +108,7 @@
   const MIXED_TEXT = window.PENECHO_MIXED_TEXT;
   const ANIMATION = window.PENECHO_ANIMATION;
   const PLUGINS = window.PENECHO_PLUGINS;
+  const SUMMON = window.PENECHO_SUMMON;
   const EFFORT_LEVELS = ["none", "low", "medium", "high", "max"],
     EFFORT_OPTIONS = ["config", ...EFFORT_LEVELS],
     TEXT_EDITOR_DEFAULT_WIDTH = 320,
@@ -100,25 +120,23 @@
     TEXT_EDITOR_FONT_FAMILY = "ui-rounded, system-ui, sans-serif",
     TEXT_INPUT_GUARD_MS = 500,
     TEXT_INPUT_MAX_LENGTH = 2000,
+    MAX_VISIBLE_TEXT_BOXES = 50,
     MIXED_FORMULA_MAX_LENGTH = 512,
     AI_TEXT_MAX_LENGTH = 1000,
     COPY_FEEDBACK_MS = 1600,
     NAVIGATION_HINT_VISIBLE_MS = 10000,
-    ANIMATION_CONTROLS_VISIBLE_MS = 10000,
-    ANIMATION_TOUCH_HOLD_MS = 1000,
-    ANIMATION_TOUCH_HOLD_MOVE_PX = 10,
-    IMAGE_TOUCH_HOLD_MS = 500,
-    IMAGE_TOUCH_HOLD_MOVE_PX = 8;
+    ANIMATION_CONTROLS_VISIBLE_MS = 10000;
   const MAX_SHARP_OVERLAY_PIXELS = 8000000,
     MAX_SHARP_OVERLAY_ITEM_PIXELS = 2500000,
-    MAX_VISIBLE_ANIMATIONS = 20,
-    MAX_VISIBLE_WIDGETS = 20,
-    MAX_VISIBLE_IMAGES = 20,
+    MAX_VISIBLE_ANIMATIONS = 100,
+    MAX_VISIBLE_WIDGETS = 100,
+    MAX_VISIBLE_IMAGES = 100,
     MAX_IMAGE_SOURCE_BYTES = 32 * 1024 * 1024,
     MAX_IMAGE_DIMENSION = 2048,
     MAX_IMAGE_PIXELS = 16 * 1024 * 1024,
-    MAX_WIDGET_HTML_LENGTH = 40000,
+    MAX_WIDGET_HTML_LENGTH = 200000,
     MAX_WIDGET_COPY_TEXT_LENGTH = 16000,
+    MAX_DIAGRAM_SOURCE_BYTES = 100 * 1024,
     MAX_WIDGET_CONTENT_DIMENSION = 1000000,
     WIDGET_SNAPSHOT_TIMEOUT_MS = 12000;
   const PLUGIN_TEMPLATE_DOCUMENTS = Object.freeze({
@@ -153,6 +171,7 @@ The generated HTML must fetch data directly in the user's browser, own its refre
 
 User writes “我需要根据地点, 显示空气质量”, names a place, and points to an empty area. Produce one html_widget there that uses that place in its API requests and displays the resulting air-quality information in large readable type.`,
   });
+  const PLUGIN_TEMPLATE_STYLES = Object.freeze({ simple:"" });
   const I18N = {
     en: {
       title: "PenEcho | Handwritten AI Canvas",
@@ -193,19 +212,24 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       textMixedModeError: "Mixed formatting was unavailable; plain text was inserted",
       textHelp: "Text formatting help",
       addImage: "Add image or photo",
+      copyFromClipboard: "Copy text or image from clipboard",
+      clipboardReading: "Reading clipboard...",
+      clipboardTextAdded: "Clipboard text added. Move or resize the text box, then confirm.",
+      clipboardUnsupported: "Clipboard format not supported. Copy plain text or an image.",
+      clipboardReadFailed: "Could not read the clipboard. Allow clipboard access or use Ctrl/Cmd+V.",
       imageLoading: "Preparing image...",
       imageAdded: "Image added",
-      imageSelected: "Editing image: drag to move, handles to resize — use the side buttons to place, merge, or delete",
+      imageSelected: "Editing image: drag the top handle to move, use edge handles to resize, or choose a side action",
       imageMerged: "Merged into canvas ink — the eraser now works on it",
       imageEditBarLabel: "Image actions",
       imagePlace: "Place image",
-      imagePlaceHint: "Keep it as an image; long-press to edit again",
+      imagePlaceHint: "Keep it as an image; use Hand and its top handle to edit again",
       imageMerge: "Merge into ink",
       imageMergeHint: "Fuse into the canvas; the eraser then works on it",
       imageDelete: "Delete image",
       imageDeleteHint: "Remove this image from the canvas",
       imageDeleted: "Image deleted",
-      imageLimitReached: "Image limit reached (20). Delete an image before adding another.",
+      imageLimitReached: "Image limit reached (100). Delete an image before adding another.",
       imageTooLarge: "The selected image is too large (32 MB maximum)",
       imageUnsupported: "This image format could not be opened",
       imageImportFailed: "The image could not be added",
@@ -283,10 +307,10 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       tourDone: "Finish",
       tourEffortTitle: "Choose how deeply AI reasons",
       tourEffortBody: "AI Effort controls the reasoning depth used for each request. Higher levels suit difficult derivations and multi-step problems, but can take longer. Configured uses the default selected in your local setup.",
-      tourPluginsTitle: "Real photos and flowcharts",
-      tourPluginsBody: "Real Photos is on by default and usually shows one web photo. Flowchart is off by default and creates diagrams with copyable Mermaid source. Manage both in Plugins.",
+      tourPluginsTitle: "Real photos and professional diagrams",
+      tourPluginsBody: "Real Photos is on by default and usually shows one web photo. Professional Diagrams is also on by default and creates editable professional visuals with copyable source. Manage both in Plugins.",
       tourHandTitle: "Move objects with the Hand tool",
-      tourHandBody: "Choose Hand, then drag anything outlined by a thin blue dashed box: images, animations, and HTML widgets returned by AI. Content merged into canvas ink has no outline; use the lasso to move it. Drag empty space to pan the canvas.",
+      tourHandBody: "Choose Hand, then use the small top handle to move outlined images, animations, and AI HTML widgets. Hand also lets you click inside HTML widgets; drag empty space to pan.",
       tourStudioThemeTitle: "Try the new Studio theme",
       tourStudioThemeBody: "Open Theme to switch the canvas's visual style and the AI's response emphasis. The new Studio theme uses a clean, focused interface and favors concise, well-structured, practical answers. You can switch themes at any time.",
       tourLassoTitle: "Work with exactly the content you select",
@@ -294,7 +318,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       tourTextTitle: "Add editable text and formulas",
       tourTextBody: "Choose Text, then click the canvas to create an input box. Markdown and likely LaTeX are formatted automatically; Preview shows the exact placement before confirmation. Confirm with the check button or Ctrl/Cmd + Enter.",
       tourImageTitle: "Add images and photos",
-      tourImageBody: "Add a picture from your device—photo library or camera on phones and tablets, image files on desktop; large pictures are compressed automatically. Long-press an image to move or resize it again. Place keeps it floating under your ink so you can draw over it, and Merge turns it into erasable strokes. Simply adding an image never triggers an AI request.",
+      tourImageBody: "Add a picture from your device; large pictures are compressed automatically. In Hand, use its top handle to move it and edge handles to resize. Place keeps it below ink, while Merge makes it erasable.",
       tourFullscreenTitle: "Give the canvas the whole screen",
       tourFullscreenBody: "Fullscreen hides surrounding browser space and expands the drawing area. Use the same button—or your browser's fullscreen shortcut—to return.",
       tourFilesTitle: "Start, export, and save locally",
@@ -308,21 +332,71 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       changelogDialog: "PenEcho release notes",
       changelogClose: "Close release notes",
       changelogBadge: "What's new",
-      changelogTitle: "Real photos, flowcharts, and smoother canvas work",
-      changelogIntro: "Version 0.7.2 adds built-in visual tools, more reliable canvas persistence, and simpler local access.",
-      changelogVisualPlugins: "Use built-in Real Photo Search for sourced web images and Flowchart for professional diagrams with copyable Mermaid source.",
-      changelogCanvasWorkflow: "Move AI widgets directly with Hand, resize images and widgets freely, and preserve remote images when saving, loading, or exporting the canvas.",
-      changelogDesktopAccess: "Protect local and LAN access with a six-digit code, connect through Kimi API or Kimi CLI, and use improved desktop updates and packaging.",
+      changelogTitle: "Professional diagrams, editable source, and precise refinement",
+      changelogIntro: "Version 0.8.0 expands PenEcho from flowcharts into professional engineering, scientific, software, and business diagrams.",
+      changelogPluginEnableNote: "Professional Diagrams is on by default. You can turn it off at any time from Plugins.",
+      changelogVisualPlugins: "Professional Diagrams chooses an appropriate editable domain format. Supported formats render locally in the existing iframe; specialized or unlisted formats can use generated HTML while preserving copyable professional source.",
+      changelogCanvasWorkflow: "Draw or describe the professional diagram you need; PenEcho chooses a suitable format and returns it as a canvas widget.",
+      changelogPluginRefine: "Plugin-returned widgets can be refined directly: draw the requested changes over the widget with the Pen, then click the Refine button that appears. This workflow applies only to plugin widgets.",
+      changelogDesktopAccess: "Professional Diagrams is second in the plugin list and on by default. Its compact capability guide adds about 1.5k–2k prompt tokens per AI request; full renderer CSS and libraries stay local and load only when needed.",
       changelogEarlierTitle: "Earlier highlights",
-      changelogImagesSummary: "0.7.1 added local images and photos with canvas-native editing, snapshots, and PNG export.",
-      changelogPluginsSummary: "0.7.0 introduced the plugin system: sandboxed HTML widgets and focused data plugins for richer live and interactive work.",
-      changelogAnimation: "0.6.0 introduced controllable, persistent animation scenes with a safe declarative Canvas2D renderer.",
+      changelogImagesSummary: "0.7.2 added sourced web photos, more reliable canvas persistence and export, and simpler protected local access.",
+      changelogPluginsSummary: "0.7.1 added local images and photos with canvas-native editing, snapshots, PNG export, and early copyable flowcharts.",
+      changelogAnimation: "0.7.0 introduced sandboxed HTML plugins; 0.6.0 introduced controllable declarative animation scenes.",
       changelogDone: "Got it",
+      settingsTitle: "Settings",
+      settingsClose: "Close settings",
+      settingsAISection: "AI",
+      settingsSummonSection: "Thinking indicator",
+      settingsSummonEnabled: "Show while AI thinks",
+      settingsSummonDescription: "A changing mathematical form and quiet text appear while each request runs.",
+      settingsChangelog: "What's new",
+      settingsHelpSection: "Help & about",
+      settingsDownloadMac: "Download for macOS",
+      settingsDownloadWin: "Download for Windows",
+      settingsGitHub: "GitHub repository",
+      summonPhrase1: "I’m following the trail your pen left behind...",
+      summonPhrase2: "Give me a moment—I’m fitting the pieces on the canvas together.",
+      summonPhrase3: "This deserves another look. I’m still thinking with you.",
+      summonPhrase4: "I’m turning the question around to see its other side...",
+      summonPhrase5: "No rush. The answer is beginning to take shape.",
+      summonPhrase6: "I’m looking for the most honest explanation between these lines.",
+      summonPhrase7: "Thinking is not waiting for an answer; it is making the question clearer.",
+      summonPhrase8: "The canvas keeps the marks; understanding gives them direction.",
+      summonPhrase9: "Every line is a question that has not quite finished speaking.",
+      summonPhrase10: "Intelligence may begin with calculation; understanding begins with attention.",
+      summonPhrase11: "Let’s turn this hazy idea into something we can both see.",
+      summonPhrase12: "An answer is not an ending. It is where the next stroke begins.",
+      summonTip1: "Tip: create professional diagrams for engineering, science, software, and business.",
+      summonTip2: "Tip: professional diagrams preserve editable source that you can copy into other tools.",
+      summonTip3: "Tip: add a few strokes beside a diagram, then use AI Refine to update only that diagram.",
+      summonTip4: "Tip: AI Refine tries to preserve the diagram’s format, layout, terminology, and visual style.",
+      summonTip5: "Tip: professional diagram renderers load only when needed; simply viewing them uses no model tokens.",
+      summonTip6: "Tip: Professional Diagrams is on by default and can be turned off from Plugins.",
+      summonTip7: "Tip: Real Photo Search places sourced web photos directly on the canvas.",
+      summonTip8: "Tip: use Hand to move and freely resize images, animations, and AI widgets.",
+      summonTip9: "Tip: remote images remain included when you save the canvas or export a PNG.",
+      summonTip10: "Tip: save a canvas to the PenEcho server so other authorized devices can open it.",
+      summonTip11: "Tip: pause a few seconds after writing and AI replies on its own; auto mode can be toggled in Settings.",
+      summonTip12: "Tip: click the AI orb on the canvas to manually pick Answer, Hint, Continue, Explain, or Plot.",
+      summonTip13: "Tip: circle content with the lasso and AI will work only on that selection.",
+      summonTip14: "Tip: the text tool understands Markdown and LaTeX; press Ctrl/Cmd + Enter to confirm.",
+      summonTip15: "Tip: AI drafts can be moved as a group, or accepted and discarded item by item.",
+      summonTip16: "Tip: raise the Reasoning effort in the toolbar for harder problems.",
+      summonTip17: "Tip: plugins add focused capabilities and can be switched off when you do not need them.",
+      summonTip18: "Tip: History can update the current snapshot or save a separate new copy.",
+      summonTip19: "Tip: zoom with the wheel, pan with the middle mouse button—the canvas spans twenty thousand squares.",
+      summonTip20: "Tip: AI ink color lives in the toolbar; AI font lives in this Settings panel.",
       debugTitle: "PenEcho debug",
       openLocalLog: "Open local server log",
-      history: "Local history",
-      historyTitle: "Local canvas history",
+      history: "Canvas history",
+      historyTitle: "Canvas history",
       historyDescription: "Stores confirmed canvas content, including restorable animation scenes. Unconfirmed AI drafts are excluded.",
+      saveLocation: "Save location",
+      storageThisDevice: "This device",
+      storagePenEchoServer: "PenEcho server",
+      storageThisDeviceDescription: "Saved only in this browser on this device. Other devices cannot see it.",
+      storagePenEchoServerDescription: "Saved on the computer running PenEcho. Anyone using this PenEcho service can see it after passing its access check.",
       closeHistory: "Close history",
       newCanvas: "New",
       saveCanvas: "Save canvas",
@@ -330,8 +404,9 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       exportPng: "Export PNG",
       newCanvasTitle: "Start a new canvas?",
       newCanvasDescription: "Save confirmed content and animation scenes before starting over. Unconfirmed AI drafts are not included.",
-      currentSnapshot: "Current snapshot: {name}",
+      currentSnapshot: "Current snapshot: {name} · {location}",
       noCurrentSnapshot: "There is no current snapshot to overwrite.",
+      currentSnapshotOtherLocation: "Current snapshot {name} is in {location}. Select that location to overwrite it.",
       newSnapshotName: "Name for new snapshot (optional)",
       cancel: "Cancel",
       newWithoutSave: "Don't save",
@@ -343,7 +418,8 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       snapshotSavingShort: "Saving...",
       loadSnapshot: "Load",
       deleteSnapshot: "Delete",
-      emptyHistory: "No local snapshots yet",
+      emptyDeviceHistory: "No canvases saved on this device yet",
+      emptyServerHistory: "No canvases saved on this PenEcho server yet",
       emptyCanvas: "The canvas is empty",
       snapshotSaved: "Canvas snapshot saved",
       snapshotOverwritten: "Current snapshot overwritten",
@@ -352,10 +428,11 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       newCanvasReady: "New canvas ready",
       exportComplete: "PNG exported",
       exportError: "Export: ",
-      snapshotError: "Local history: ",
+      snapshotError: "Canvas history: ",
       snapshotTiles: "canvas tiles",
       snapshotImages: "images",
-      deleteSnapshotConfirm: "Delete this local snapshot?",
+      deleteSnapshotConfirmDevice: "Delete this snapshot from this device?",
+      deleteSnapshotConfirmServer: "Delete this shared snapshot from the PenEcho server?",
       footerTip: "AI drafts: move the whole group or adjust, accept, and discard items independently",
       ready: "Ready",
       aiBusy: "AI is working. Please wait.",
@@ -424,6 +501,9 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       copyPluginMarkdown: "Copy Markdown",
       pluginMarkdownCopied: "Copied",
       pluginMarkdownCopyFailed: "Copy failed",
+      duplicatePlugin: "Create editable copy",
+      pluginCopyName: "Copy of {name}",
+      pluginCopyDraftReady: "Editable copy of {name} is ready. Review and save it as your own plugin.",
       pluginBuiltInRuntime: "Built-in runtime capability",
       pluginDefaultState: "Default: {state}",
       pluginRequestField: "Request field: {field}",
@@ -444,11 +524,20 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       pluginTitleLabel: "Plugin title",
       pluginTitlePlaceholder: "Filled automatically by Improve with AI, or enter your own",
       pluginDocumentLabel: "Plugin Markdown",
-      pluginDocumentHint: "Prefer Improve with AI before saving. The final document needs frontmatter, an exact One-shot example, and no more than 3000 UTF-8 bytes.",
+      pluginDocumentHint: "Prefer Improve with AI before saving. The final document needs frontmatter and an exact One-shot example.",
+      pluginStylesLabel: "Plugin CSS (optional)",
+      pluginStylesHint: "Saved CSS is injected only when this plugin's widget is mounted; it does not load at canvas startup. Edit here or import a .css file. Put external JS/CSS URLs in generated widget HTML.",
+      pluginStylesImport: "Import .css",
+      pluginStylesImported: "Imported {name}. Review the preview before saving.",
+      pluginStylesFileType: "Choose a .css file",
+      pluginStylesFileTooLarge: "CSS file must be 32000 bytes or smaller",
+      pluginStylesReadFailed: "CSS file could not be read: {error}",
+      pluginStylesPreview: "Plugin CSS preview",
       improvePluginWithAi: "Improve with AI",
       saveAndEnablePlugin: "Save and enable",
       pluginMarketplaceNote: "The future marketplace will support free or points-priced downloads. Authors will be able to share plugins and earn points.",
-      pluginBytes: "{bytes} / 3000 bytes",
+      pluginBytes: "{bytes} / 12000 bytes",
+      pluginStylesBytes: "{bytes} / 32000 bytes",
       pluginDraftValid: "Ready to save as {name}",
       pluginDraftInvalid: "Fix the plugin document: {error}",
       pluginIdExists: "Plugin id {id} already exists",
@@ -472,9 +561,9 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       animationPause: "Pause",
       animationRestart: "Restart",
       animationDelete: "Delete animation",
-      animationSelected: "Editing animation; drag to move, resize with edge or corner handles, then confirm or cancel",
+      animationSelected: "Editing animation; drag the top handle to move, resize with edge or corner handles, then confirm or cancel",
       animationDeleted: "Animation deleted",
-      animationLimitReached: "Animation limit reached (20). Delete an animation before adding another.",
+      animationLimitReached: "Animation limit reached (100). Delete an animation before adding another.",
       snapshotAnimations: "animations",
       widgetAccept: "Keep widget",
       widgetDiscard: "Discard widget",
@@ -483,9 +572,14 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       widgetDeleted: "Widget deleted",
       widgetSourceCopied: "Widget source copied",
       widgetSourceCopyFailed: "Widget source could not be copied",
+      widgetRefine: "AI Refine",
+      widgetRefineHint: "Refine and replace this widget using its content and the current canvas",
+      widgetRefinePending: "New marks detected near this diagram. Use its AI Refine button to update it, or choose a manual AI action above. Auto AI is paused.",
+      widgetRefining: "AI is refining this widget",
+      widgetReplacementReady: "Review the refined replacement",
       widgetExportFailed: "A live widget could not be captured. Wait for it to finish loading and try again.",
       widgetPluginUnavailable: "The plugin document could not be loaded",
-      widgetLimitReached: "Live widget limit reached (20). Delete a widget before adding another.",
+      widgetLimitReached: "Live widget limit reached (100). Delete a widget before adding another.",
       snapshotWidgets: "live widgets",
       clearConfirm: "Clear the whole canvas?",
       timeout: "Request timed out",
@@ -495,6 +589,8 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     zh: ZH,
   };
   const PLUGIN_STORAGE_KEY = "penecho-plugins",
+    DIAGRAM_RUNTIME_VERSION = "penecho-diagram-source-v1",
+    DIAGRAM_SOURCE_FORMATS = new Set(["mermaid", "dot", "bpmn-xml", "vega-lite", "geojson", "smiles", "cytoscape-json"]),
     BUILTIN_PLUGIN_DEFINITIONS = Object.freeze([
       Object.freeze({
         id: "animation",
@@ -514,6 +610,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     widgetSnapshotRequests = new Map(),
     widgetHostPointerAnchors = new Map(),
     screenCalibration = new Map();
+  let diagramRuntimePromise = null;
   let screenClientRatio = 1;
   function storedPluginSettings() {
     let stored = {};
@@ -535,6 +632,8 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     storedResearchGrid = localStorage.getItem("penecho-research-grid"),
     storedAutoEnabled = localStorage.getItem("penecho-auto-ai"),
     storedAutoDelayText = localStorage.getItem("penecho-auto-delay-ms"),
+    storedSummonEnabled = localStorage.getItem("penecho-summon-enabled"),
+    storedSnapshotLocation = localStorage.getItem("penecho-snapshot-location"),
     storedAiEffortText = String(localStorage.getItem("penecho-ai-effort") || "").trim().toLowerCase(),
     storedAiEffort = storedAiEffortText === "xhigh" ? "max" : storedAiEffortText,
     storedAutoDelay = storedAutoDelayText === null ? NaN : Number(storedAutoDelayText),
@@ -549,6 +648,8 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     serverAutoDelay = Number.isFinite(configuredAutoDelay) && configuredAutoDelay >= 0 ? configuredAutoDelay : DEFAULT_AUTO_DELAY,
     initialAutoDelay = Number.isFinite(storedAutoDelay) && storedAutoDelay >= 0 && storedAutoDelay <= 10000 ? storedAutoDelay : Math.min(10000, serverAutoDelay),
     initialAutoEnabled = storedAutoEnabled === null ? true : storedAutoEnabled === "true",
+    initialSummonEnabled = storedSummonEnabled === null ? true : storedSummonEnabled === "true",
+    initialSnapshotLocation = storedSnapshotLocation === "server" ? "server" : "device",
     initialAiEffort = EFFORT_OPTIONS.includes(storedAiEffort) ? storedAiEffort : EFFORT_OPTIONS.includes(configuredAiEffort) ? configuredAiEffort : "config",
     initialAiTimeout = Number.isFinite(configuredAiTimeout) && configuredAiTimeout >= 10000 ? configuredAiTimeout : DEFAULT_AI_TIMEOUT;
   function authenticatedApiHeaders(headers = {}) {
@@ -571,23 +672,29 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       touchGesture: null,
       panGesture: null,
       textEditors: new Map(),
+      textBoxes: [],
       textEditorStyleSheet: null,
       nextTextEditorId: 1,
+      nextTextBoxId: 1,
       nextTextEditorZ: 1,
       activeTextEditorId: null,
+      selectedTextBoxId: null,
+      textBoxHistoryBefore: null,
       animations: [],
       nextAnimationId: 1,
       selectedAnimationId: null,
       animationGesture: null,
-      animationTouchHold: null,
       animationEdit: null,
       widgets: [],
       nextWidgetId: 1,
       pendingWidget: null,
+      pendingWidgetReplacement: null,
       selectedWidgetId: null,
       widgetEdit: null,
       widgetGesture: null,
+      widgetHostPan: null,
       widgetHistoryBefore: null,
+      widgetRefineCandidate: null,
       widgetMessageHooked: false,
       plugins: { ...initialPlugins },
       animationFrame: 0,
@@ -606,19 +713,25 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       selectedImageId: null,
       imageEdit: null,
       imageGesture: null,
-      imageTouchHold: null,
       imageHistoryBefore: null,
+      imageHandReturnMode: null,
       imageImporting: false,
+      clipboardImporting: false,
       textInputBlockedUntil: 0,
       textTap: null,
       latestTypedInput: null,
       pending: null,
       pendingGesture: null,
+      aiDraftReturnMode: null,
+      pendingHistoryRestored: false,
+      pointerPreview: null,
       copyGeneration: 0,
       selection: null,
       selectionGesture: null,
       hotspotTrail: [],
       auto: initialAutoEnabled,
+      summonEnabled: initialSummonEnabled,
+      summonAnchor: null,
       timer: 0,
       autoPopoverTimer: 0,
       effortPopoverTimer: 0,
@@ -644,8 +757,10 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       busy: false,
       activeAI: null,
       snapshotLoadGeneration: 0,
+      snapshotLocation: initialSnapshotLocation,
       currentSnapshotId: null,
       currentSnapshotName: "",
+      currentSnapshotLocation: null,
       restoreGeneration: 0,
       recognitionGeneration: 0,
       userRevision: 0,
@@ -663,12 +778,14 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       statusKey: "ready",
     };
   let textHelpInvoker = null;
+  let pluginStylesPreviewReady = false,
+    pluginStylesPreviewPayload = null;
   const AI_CANCELLED = "AI_CANCELLED";
   const AI_REJECTED = "AI_REJECTED";
   const AI_SUPERSEDED = "AI_SUPERSEDED";
   const FEATURE_TOUR_STORAGE_KEY = "penecho-tour-progress";
   const CHANGELOG_STORAGE_KEY = "penecho-changelog-seen";
-  const CHANGELOG_VERSION = "0.7.2";
+  const CHANGELOG_VERSION = "0.8.0";
   // Keep seen IDs stable. Add a new ID (or bump its -vN suffix) to show only that feature to returning users.
   const FEATURE_TOUR_STEPS = Object.freeze([
     { id: "core-effort-v1", targets: ["#aiEffortButton"], titleKey: "tourEffortTitle", bodyKey: "tourEffortBody", placement: "bottom", radius: 8 },
@@ -708,12 +825,149 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     restoreFocus: null,
   };
   const COLOR_CLASS = { "#2563eb": "color-blue", "#1f2937": "color-black", "#dc2626": "color-red", "#ea580c": "color-orange", "#ca8a04": "color-gold", "#16a34a": "color-green", "#0891b2": "color-cyan", "#9333ea": "color-purple" };
+  const runtimeStyleRules = new Map();
+  function runtimeElementStyle(element, key) {
+    if (!element || !key) return null;
+    let record = runtimeStyleRules.get(key);
+    if (!record) {
+      const className = `penecho-runtime-${String(key).replace(/[^a-z0-9_-]/gi, "-")}`,
+        sheet = textEditorStyleSheet();
+      if (!sheet) return null;
+      try {
+        const index = sheet.cssRules.length;
+        sheet.insertRule(`.${className} {}`, index);
+        record = { className, style:sheet.cssRules[index]?.style || null };
+        if (!record.style) return null;
+        runtimeStyleRules.set(key, record);
+      } catch {
+        return null;
+      }
+    }
+    element.classList.add(record.className);
+    return record.style;
+  }
   const setStatus = (text, key = null) => {
     status.textContent = text;
     state.statusKey = key;
   };
   const setStatusKey = (key) => setStatus(t(key), key);
   const t = (key) => I18N[state.language][key] || I18N.zh[key] || key;
+  const summonFX = SUMMON?.create({
+    fxCanvas:summonLayer,
+    textLayer: document.querySelector("#summonTextLayer"),
+    t,
+    getTransform: () => ({ scale: state.scale, panX: state.panX, panY: state.panY, width: view.clientWidth, height: view.clientHeight, dpr: devicePixelRatio || 1 }),
+    getAiColor: () => state.aiColor,
+    styleFor: (element) => runtimeElementStyle(element, "summon-copy"),
+  });
+  function summonBlockers() {
+    const visible = viewportRect(),
+      rects = [];
+    if (visible) {
+      for (const [k, c] of tiles) {
+        const [tx, ty] = k.split(",").map(Number),
+          tileBox = { x: tx * TILE, y: ty * TILE, w: TILE, h: TILE };
+        if (!intersection(tileBox, visible)) continue;
+        let ink = state.inkBounds.get(k);
+        if (ink === undefined) {
+          ink = c ? inkBox(c, Math.min(TILE, SIZE - tx * TILE), Math.min(TILE, SIZE - ty * TILE)) : null;
+          state.inkBounds.set(k, ink);
+        }
+        if (ink) rects.push({ x: tileBox.x + ink.x, y: tileBox.y + ink.y, w: ink.w, h: ink.h });
+      }
+    }
+    for (const widget of state.widgets) rects.push({ x: widget.x, y: widget.y, w: widget.w, h: widget.h });
+    for (const editor of state.textEditors.values()) {
+      const scale = Math.max(0.03, state.scale);
+      rects.push({ x: editor.x, y: editor.y, w: editor.widthCss / scale, h: editor.heightCss / scale });
+    }
+    for (const image of state.images)
+      if (Number.isFinite(image.x) && Number.isFinite(image.y)) rects.push({ x: image.x, y: image.y, w: image.logicalWidth || image.width || 0, h: image.logicalHeight || image.height || 0 });
+    for (const animation of state.animations)
+      if (Number.isFinite(animation.x)) rects.push({ x: animation.x, y: animation.y, w: animation.w, h: animation.h });
+    for (const item of state.pending?.items || [])
+      if (item && Number.isFinite(item.x)) rects.push({ x: item.x, y: item.y, w: item.layoutWidth || item.w || 0, h: item.layoutHeight || item.h || 0 });
+    return rects.filter((r) => r.w > 0 && r.h > 0);
+  }
+  function summonControlBlockers() {
+    const viewRect = view.getBoundingClientRect(),
+      viewport = { x:0, y:0, w:view.clientWidth, h:view.clientHeight },
+      selectors = [
+        ".object-chrome-button",
+        ".animation-controls:not([hidden])",
+        ".image-edit-bar:not([hidden])",
+        ".selection-context-toolbar",
+        ".text-editor",
+        ".text-input-hint:not([hidden])",
+        ".ai-embodiment",
+        ".ai-embodiment.menu-open .radial-action",
+        "#tip",
+      ].join(","),
+      rects = [];
+    for (const element of view.querySelectorAll(selectors)) {
+      const style = getComputedStyle(element),
+        rect = element.getBoundingClientRect();
+      if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) <= 0.02
+        || rect.width <= 0 || rect.height <= 0) continue;
+      const padding = 8,
+        clipped = intersection({
+          x:rect.left - viewRect.left - padding,
+          y:rect.top - viewRect.top - padding,
+          w:rect.width + padding * 2,
+          h:rect.height + padding * 2,
+        }, viewport);
+      if (clipped) rects.push({ ...clipped, weight:4 });
+    }
+    return rects;
+  }
+  function summonScreenBlockers() {
+    const scale = Math.max(0.03, state.scale),
+      viewport = { x:0, y:0, w:view.clientWidth, h:view.clientHeight },
+      padding = 8,
+      rects = [];
+    for (const rect of summonBlockers()) {
+      const clipped = intersection({
+        x:rect.x * scale + state.panX - padding,
+        y:rect.y * scale + state.panY - padding,
+        w:rect.w * scale + padding * 2,
+        h:rect.h * scale + padding * 2,
+      }, viewport);
+      if (clipped) rects.push({ ...clipped, weight:1 });
+    }
+    return rects.concat(summonControlBlockers());
+  }
+  function summonPlacement() {
+    const width = view.clientWidth,
+      height = view.clientHeight,
+      scale = Math.max(0.03, state.scale);
+    if (width <= 0 || height <= 0 || !SUMMON?.chooseThinkingPlacement) return null;
+    const anchor = state.summonAnchor
+        ? {
+            x:state.summonAnchor.x * scale + state.panX,
+            y:state.summonAnchor.y * scale + state.panY,
+            w:state.summonAnchor.w * scale,
+            h:state.summonAnchor.h * scale,
+          }
+        : null,
+      placement = SUMMON.chooseThinkingPlacement({
+        width,
+        height,
+        anchor,
+        blockers:summonScreenBlockers(),
+      });
+    return {
+      x:(placement.x - state.panX) / scale,
+      y:(placement.y - state.panY) / scale,
+    };
+  }
+  function showSummon() {
+    if (!summonFX || !state.summonEnabled) return;
+    const spot = summonPlacement();
+    if (spot) summonFX.show(spot);
+  }
+  function hideSummon() {
+    summonFX?.hide();
+  }
   function readFeatureTourProgress() {
     try {
       const stored = TOUR.parseProgress(localStorage.getItem(FEATURE_TOUR_STORAGE_KEY));
@@ -794,14 +1048,14 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       elements = featureTourElements(step),
       target = featureTourTargetRect(step, elements);
     if (!target) {
-      Reflect.get(tourHighlight, "style").setProperty("visibility", "hidden");
-      Reflect.get(tourCard, "style").setProperty("visibility", "hidden");
+      runtimeElementStyle(tourHighlight, "tour-highlight")?.setProperty("visibility", "hidden");
+      runtimeElementStyle(tourCard, "tour-card")?.setProperty("visibility", "hidden");
       showFeatureTourStep(featureTour.index + 1, 1);
       return;
     }
     featureTour.targets = elements;
     const viewport = featureTourViewport(),
-      layerStyle = Reflect.get(tourLayer, "style"),
+      layerStyle = runtimeElementStyle(tourLayer, "tour-layer"),
       padding = step.padding ?? 7,
       viewportRight = viewport.left + viewport.width,
       viewportBottom = viewport.top + viewport.height,
@@ -809,25 +1063,25 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       top = Math.max(viewport.top + 2, target.top - padding),
       right = Math.min(viewportRight - 2, target.right + padding),
       bottom = Math.min(viewportBottom - 2, target.bottom + padding);
-    layerStyle.setProperty("--tour-viewport-width", `${Math.max(1, Math.floor(viewport.width))}px`);
-    layerStyle.setProperty("--tour-viewport-height", `${Math.max(1, Math.floor(viewport.height))}px`);
+    layerStyle?.setProperty("--tour-viewport-width", `${Math.max(1, Math.floor(viewport.width))}px`);
+    layerStyle?.setProperty("--tour-viewport-height", `${Math.max(1, Math.floor(viewport.height))}px`);
     tourCard.classList.toggle("tour-compact", viewport.width < 300);
-    const highlightStyle = Reflect.get(tourHighlight, "style"),
-      cardStyle = Reflect.get(tourCard, "style");
-    highlightStyle.setProperty("left", `${Math.round(left)}px`);
-    highlightStyle.setProperty("top", `${Math.round(top)}px`);
-    highlightStyle.setProperty("width", `${Math.max(2, Math.round(right - left))}px`);
-    highlightStyle.setProperty("height", `${Math.max(2, Math.round(bottom - top))}px`);
-    highlightStyle.setProperty("border-radius", `${step.radius ?? 10}px`);
+    const highlightStyle = runtimeElementStyle(tourHighlight, "tour-highlight"),
+      cardStyle = runtimeElementStyle(tourCard, "tour-card");
+    highlightStyle?.setProperty("left", `${Math.round(left)}px`);
+    highlightStyle?.setProperty("top", `${Math.round(top)}px`);
+    highlightStyle?.setProperty("width", `${Math.max(2, Math.round(right - left))}px`);
+    highlightStyle?.setProperty("height", `${Math.max(2, Math.round(bottom - top))}px`);
+    highlightStyle?.setProperty("border-radius", `${step.radius ?? 10}px`);
     const cardRect = tourCard.getBoundingClientRect(),
       coachmarkMargin = viewport.width <= 620 ? 8 : 12,
       position = TOUR.placeCoachmark(target, { width: cardRect.width, height: cardRect.height }, viewport, step.placement, { margin: coachmarkMargin, gap: 15, arrowMargin: 23 });
-    cardStyle.setProperty("left", `${Math.round(position.x)}px`);
-    cardStyle.setProperty("top", `${Math.round(position.y)}px`);
-    cardStyle.setProperty("--tour-arrow-offset", `${Math.round(position.arrowOffset)}px`);
+    cardStyle?.setProperty("left", `${Math.round(position.x)}px`);
+    cardStyle?.setProperty("top", `${Math.round(position.y)}px`);
+    cardStyle?.setProperty("--tour-arrow-offset", `${Math.round(position.arrowOffset)}px`);
     tourCard.dataset.placement = position.placement;
-    highlightStyle.setProperty("visibility", "visible");
-    cardStyle.setProperty("visibility", "visible");
+    highlightStyle?.setProperty("visibility", "visible");
+    cardStyle?.setProperty("visibility", "visible");
     if (!featureTour.shownIds.has(step.id)) {
       featureTour.shownIds.add(step.id);
       markFeatureTourStepsSeen([step]);
@@ -850,7 +1104,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     tourProgressTrack.setAttribute("aria-label", t("tourProgress"));
     tourProgressTrack.setAttribute("aria-valuemax", String(total));
     tourProgressTrack.setAttribute("aria-valuenow", String(current));
-    Reflect.get(tourProgressBar, "style").setProperty("width", `${(current / total) * 100}%`);
+    runtimeElementStyle(tourProgressBar, "tour-progress")?.setProperty("width", `${(current / total) * 100}%`);
     tourCard.dataset.stepId = step.id;
     scheduleFeatureTourPosition();
   }
@@ -868,8 +1122,8 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     }
     featureTour.index = nextIndex;
     featureTour.targets = elements;
-    Reflect.get(tourCard, "style").setProperty("visibility", "hidden");
-    Reflect.get(tourHighlight, "style").setProperty("visibility", "hidden");
+    runtimeElementStyle(tourCard, "tour-card")?.setProperty("visibility", "hidden");
+    runtimeElementStyle(tourHighlight, "tour-highlight")?.setProperty("visibility", "hidden");
     updateFeatureTourLanguage();
     const rect = featureTourTargetRect(featureTour.steps[nextIndex], elements);
     if (featureTourTargetNeedsScroll(rect)) elements[0].scrollIntoView({ block: featureTour.steps[nextIndex].placement === "center" ? "center" : "nearest", inline: "nearest", behavior: "auto" });
@@ -905,7 +1159,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     document.body.classList.add("tour-open");
     tourLayer.hidden = false;
     tourLayer.setAttribute("aria-hidden", "false");
-    Reflect.get(tourHighlight, "style").setProperty("visibility", "hidden");
+    runtimeElementStyle(tourHighlight, "tour-highlight")?.setProperty("visibility", "hidden");
     observeActiveFeatureTour();
     return showFeatureTourStep(0, 1);
   }
@@ -925,14 +1179,14 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     tourLayer.setAttribute("aria-hidden", "true");
     tourMain.inert = false;
     document.body.classList.remove("tour-open");
-    Reflect.get(tourHighlight, "style").setProperty("visibility", "hidden");
-    Reflect.get(tourCard, "style").setProperty("visibility", "hidden");
+    runtimeElementStyle(tourHighlight, "tour-highlight")?.setProperty("visibility", "hidden");
+    runtimeElementStyle(tourCard, "tour-card")?.setProperty("visibility", "hidden");
     if (restoreScroll) window.scrollTo({ left: featureTour.restoreScrollX, top: featureTour.restoreScrollY, behavior: "auto" });
     requestAnimationFrame(() => {
       if (featureTour.active) return;
       if (options.changelog !== false && maybeShowChangelog()) return;
       if (restore) {
-        const target = restoreFocus?.isConnected && restoreFocus !== document.body ? restoreFocus : tourReplayButton;
+        const target = restoreFocus?.isConnected && restoreFocus !== document.body ? restoreFocus : settingsButton;
         target?.focus({ preventScroll: true });
       }
     });
@@ -1037,14 +1291,14 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       localStorage.setItem(CHANGELOG_STORAGE_KEY, CHANGELOG_VERSION);
     } catch {}
   }
-  function maybeShowChangelog() {
-    if (!changelogLayer || !changelogDialog || changelog.active || featureTour.active || !pluginPopover.hidden || changelogSeen()) return false;
+  function maybeShowChangelog(force = false) {
+    if (!changelogLayer || !changelogDialog || changelog.active || featureTour.active || !pluginPopover.hidden || (!force && changelogSeen())) return false;
     hideAutoDelayControl();
     hideEffortControl();
     hidePluginControl();
     closeRadialMenu();
     const active = document.activeElement;
-    changelog.restoreFocus = active?.isConnected && active !== document.body && !tourLayer.contains(active) ? active : tourReplayButton;
+    changelog.restoreFocus = active?.isConnected && active !== document.body && !tourLayer.contains(active) ? active : settingsButton;
     changelog.active = true;
     tourMain.inert = true;
     document.body.classList.add("changelog-open");
@@ -1086,6 +1340,45 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     focusable[next]?.focus();
     return true;
   }
+  const settings = { open: false, restoreFocus: null };
+  function updateSettingsPanel() {
+    if (!settingsPanel) return;
+    settingsAutoToggle.classList.toggle("on", state.auto);
+    settingsAutoToggle.setAttribute("aria-checked", String(state.auto));
+    summonToggle.classList.toggle("on", state.summonEnabled);
+    summonToggle.setAttribute("aria-checked", String(state.summonEnabled));
+  }
+  function openSettings() {
+    if (settings.open || !settingsLayer) return false;
+    hideAutoDelayControl();
+    hideEffortControl();
+    hidePluginControl();
+    closeRadialMenu();
+    settings.open = true;
+    settings.restoreFocus = document.activeElement?.isConnected && document.activeElement !== document.body ? document.activeElement : settingsButton;
+    settingsLayer.hidden = false;
+    settingsLayer.setAttribute("aria-hidden", "false");
+    settingsButton.setAttribute("aria-expanded", "true");
+    updateSettingsPanel();
+    requestAnimationFrame(() => settingsPanel.focus({ preventScroll: true }));
+    return true;
+  }
+  function closeSettings(restore = true) {
+    if (!settings.open) return false;
+    settings.open = false;
+    settingsLayer.hidden = true;
+    settingsLayer.setAttribute("aria-hidden", "true");
+    settingsButton.setAttribute("aria-expanded", "false");
+    if (restore) requestAnimationFrame(() => settings.restoreFocus?.focus({ preventScroll: true }));
+    settings.restoreFocus = null;
+    return true;
+  }
+  function setSummonEnabled(enabled) {
+    state.summonEnabled = Boolean(enabled);
+    localStorage.setItem("penecho-summon-enabled", String(state.summonEnabled));
+    if (!state.summonEnabled) hideSummon();
+    updateSettingsPanel();
+  }
   function maybeStartOnboarding() {
     if (!maybeStartFeatureTour()) maybeShowChangelog();
   }
@@ -1102,6 +1395,10 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     document.querySelector("#autoLabel").textContent = state.auto ? t("autoEnabled").replace("{delay}", autoDelayText()) : t("autoDisabled");
     range.value = String(state.autoDelayMs / 1000);
     value.textContent = `${autoDelayText()} s`;
+    if (settingsAutoToggle) {
+      settingsAutoToggle.classList.toggle("on", state.auto);
+      settingsAutoToggle.setAttribute("aria-checked", String(state.auto));
+    }
   }
   function updateEffortControl() {
     if (!EFFORT_OPTIONS.includes(state.reasoningEffort)) state.reasoningEffort = "config";
@@ -1157,6 +1454,53 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
   function pluginEnabled(pluginId) {
     return state.plugins[pluginId] === true;
   }
+  function diagramRuntime() {
+    return window.PENECHO_DIAGRAM_RUNTIME || null;
+  }
+  function canonicalStoredDiagramFormat(value) {
+    const format = String(value || "").trim().toLowerCase();
+    return DIAGRAM_SOURCE_FORMATS.has(format) ? format : "";
+  }
+  function diagramSourceFits(value) {
+    return typeof value === "string" && value.trim() && new TextEncoder().encode(value).length <= MAX_DIAGRAM_SOURCE_BYTES;
+  }
+  function loadDiagramRuntime() {
+    if (diagramRuntime()) return Promise.resolve(diagramRuntime());
+    if (diagramRuntimePromise) return diagramRuntimePromise;
+    diagramRuntimePromise = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "plugins/flowchart/runtime.js";
+      script.async = true;
+      script.onload = () => {
+        const runtime = diagramRuntime();
+        if (runtime) resolve(runtime);
+        else reject(Error("Professional diagram runtime did not initialize"));
+      };
+      script.onerror = () => reject(Error("Professional diagram runtime could not be loaded"));
+      document.head.append(script);
+    }).catch((error) => {
+      diagramRuntimePromise = null;
+      throw error;
+    });
+    return diagramRuntimePromise;
+  }
+  function ensurePluginRuntime(pluginId) {
+    return pluginId === "flowchart" ? loadDiagramRuntime() : Promise.resolve(null);
+  }
+  async function enableSnapshotWidgetPlugins(items) {
+    const pluginIds = [...new Set((Array.isArray(items) ? items : [])
+      .map((item) => typeof item?.pluginId === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(item.pluginId) ? item.pluginId : "")
+      .filter(Boolean))];
+    if (!pluginIds.length) return;
+    for (const pluginId of pluginIds) state.plugins[pluginId] = true;
+    if (pluginIds.includes("flowchart") && items.some((item) => item?.pluginId === "flowchart" && item?.widgetType === "diagram_source")) {
+      try { await ensurePluginRuntime("flowchart"); }
+      catch (error) { state.pluginCatalogError = error.message; }
+    }
+    persistPluginSettings();
+    syncWidgetRuntime();
+    updatePluginControl();
+  }
   function dataPluginDefinitions() {
     return PLUGIN_DEFINITIONS.filter((plugin) => plugin.documentPath);
   }
@@ -1174,6 +1518,11 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     return dataPluginDefinitions().filter((plugin) => pluginEnabled(plugin.id))
       .map((plugin) => pluginManifests.get(plugin.id))
       .filter(Boolean)
+      .sort((a, b) => {
+        const priority = (id) => id === "general" ? 0 : id === "flowchart" ? 1 : 2,
+          difference = priority(a.id) - priority(b.id);
+        return difference || a.id.localeCompare(b.id);
+      })
       .map((manifest) => ({
         id: manifest.id,
         name: manifest.name,
@@ -1189,8 +1538,11 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     if (plugins.length) payload.plugins = plugins;
     return payload;
   }
-  function validPluginCatalogPath(value) {
-    return typeof value === "string" && /^plugins\/(?:private\/)?[a-z0-9][a-z0-9-]{0,63}\.md$/.test(value) ? value : null;
+  function validPluginCatalogPath(value, extension) {
+    if (typeof value !== "string") return null;
+    const suffix = extension === "css" ? "styles\\.css" : "plugin\\.md",
+      legacy = extension === "md" ? "|[a-z0-9][a-z0-9-]{0,63}\\.md" : "";
+    return new RegExp(`^plugins/(?:private/)?(?:[a-z0-9][a-z0-9-]{0,63}/${suffix}${legacy})$`).test(value) ? value : null;
   }
   async function loadPluginDocuments() {
     if (state.pluginCatalogLoading) return false;
@@ -1202,15 +1554,26 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       const response = await fetch("/api/plugins", { credentials:"same-origin", cache:"no-store" });
       if (!response.ok) throw Error(`HTTP ${response.status}`);
       const catalog = await response.json(), entries = (Array.isArray(catalog?.plugins) ? catalog.plugins : [])
-        .map((entry) => ({ path:validPluginCatalogPath(entry?.path), builtIn:entry?.builtIn !== false }))
+        .map((entry) => ({
+          path:validPluginCatalogPath(entry?.path, "md"),
+          stylePath:entry?.stylePath ? validPluginCatalogPath(entry.stylePath, "css") : null,
+          builtIn:entry?.builtIn !== false,
+          error:typeof entry?.error === "string" ? entry.error : "",
+        }))
         .filter((entry) => entry.path), uniqueEntries = [...new Map(entries.map((entry) => [entry.path, entry])).values()];
-      const loaded = await Promise.all(uniqueEntries.map(async ({ path:documentPath, builtIn }) => {
+      const loaded = await Promise.all(uniqueEntries.map(async ({ path:documentPath, stylePath, builtIn, error:catalogError }) => {
+        if (catalogError) return { documentPath, error:catalogError };
         try {
-          const documentResponse = await fetch(documentPath, { credentials:"same-origin", cache:"no-store" });
+          const [documentResponse, styleResponse] = await Promise.all([
+            fetch(documentPath, { credentials:"same-origin", cache:"no-store" }),
+            stylePath ? fetch(stylePath, { credentials:"same-origin", cache:"no-store" }) : null,
+          ]);
           if (!documentResponse.ok) throw Error(`HTTP ${documentResponse.status}`);
-          const manifest = PLUGINS?.parse(await documentResponse.text());
+          if (styleResponse && !styleResponse.ok) throw Error(`CSS HTTP ${styleResponse.status}`);
+          const [document, styles] = await Promise.all([documentResponse.text(), styleResponse ? styleResponse.text() : ""]),
+            manifest = PLUGINS?.parse(document, styles);
           if (!manifest) throw Error("Plugin parser is unavailable");
-          return { documentPath, manifest, builtIn };
+          return { documentPath, stylePath, manifest, builtIn };
         } catch (error) {
           return { documentPath, error:error.message };
         }
@@ -1229,18 +1592,21 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
         definitions.push(Object.freeze({
           id:item.manifest.id,
           documentPath:item.documentPath,
+          stylePath:item.stylePath,
           builtIn:item.builtIn,
-          defaultEnabled:["general", "image-search", "weather"].includes(item.manifest.id),
+          defaultEnabled:["general", "flowchart", "image-search", "weather"].includes(item.manifest.id),
         }));
       }
       definitions.sort((a, b) => (manifests.get(a.id)?.name || a.id).localeCompare(manifests.get(b.id)?.name || b.id));
       const generalDefinitions = definitions.filter((definition) => definition.id === "general"),
+        professionalDefinitions = definitions.filter((definition) => definition.id === "flowchart"),
         promotedDefinitions = ["image-search", "weather"].map((id) => definitions.find((definition) => definition.id === id)).filter(Boolean),
-        fixedDefinitionIds = new Set(["general", ...promotedDefinitions.map((definition) => definition.id)]),
+        fixedDefinitionIds = new Set(["general", "flowchart", ...promotedDefinitions.map((definition) => definition.id)]),
         remainingDefinitions = definitions.filter((definition) => !fixedDefinitionIds.has(definition.id)),
         previousIds = new Set(dataPluginDefinitions().map((plugin) => plugin.id)), nextIds = new Set(definitions.map((plugin) => plugin.id));
+      if (state.activeAI?.widgetEdit || state.pendingWidgetReplacement) cancelWidgetRefinement("plugin-catalog-reloaded");
       for (const widget of [...state.widgets, ...(state.pendingWidget ? [state.pendingWidget] : [])]) unmountWidget(widget);
-      PLUGIN_DEFINITIONS.splice(0, PLUGIN_DEFINITIONS.length, ...generalDefinitions, ...BUILTIN_PLUGIN_DEFINITIONS, ...promotedDefinitions, ...remainingDefinitions);
+      PLUGIN_DEFINITIONS.splice(0, PLUGIN_DEFINITIONS.length, ...generalDefinitions, ...professionalDefinitions, ...BUILTIN_PLUGIN_DEFINITIONS, ...promotedDefinitions, ...remainingDefinitions);
       pluginManifests.clear();
       for (const [id, manifest] of manifests) pluginManifests.set(id, manifest);
       pluginLoadErrors.clear();
@@ -1248,6 +1614,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       const stored = storedPluginSettings();
       for (const definition of definitions) if (typeof state.plugins[definition.id] !== "boolean") state.plugins[definition.id] = stored[definition.id];
       for (const id of previousIds) if (!nextIds.has(id)) state.plugins[id] = false;
+      if (pluginEnabled("flowchart")) await ensurePluginRuntime("flowchart");
       if (state.pendingWidget && !pluginManifests.has(state.pendingWidget.pluginId)) rejectPendingWidget();
       if (state.widgetEdit && !pluginManifests.has(selectedWidget()?.pluginId)) acceptWidgetEdit();
       for (const widget of state.widgets) if (pluginEnabled(widget.pluginId)) mountWidget(widget);
@@ -1402,6 +1769,17 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
           actions.append(detailButton);
           option.append(detail);
         }
+        if (plugin.documentPath && manifest?.document) {
+          const duplicateButton = document.createElement("button");
+          duplicateButton.className = "plugin-duplicate-button";
+          duplicateButton.type = "button";
+          duplicateButton.dataset.pluginDuplicate = plugin.id;
+          duplicateButton.disabled = state.pluginAuthoringBusy;
+          duplicateButton.setAttribute("aria-label", t("duplicatePlugin"));
+          duplicateButton.setAttribute("title", t("duplicatePlugin"));
+          duplicateButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="11" height="11" rx="1.5"/><path d="M15 14v5.5A1.5 1.5 0 0 1 13.5 21h-9A1.5 1.5 0 0 1 3 19.5v-9A1.5 1.5 0 0 1 4.5 9H9"/></svg>';
+          actions.append(duplicateButton);
+        }
         if (plugin.documentPath && plugin.builtIn === false) {
           const deleteButton = document.createElement("button");
           deleteButton.className = "plugin-delete-button";
@@ -1451,6 +1829,45 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       if (button.isConnected) button.textContent = original;
     }, 1800);
   }
+  function nextPluginCopyId(pluginId) {
+    const taken = new Set(PLUGIN_DEFINITIONS.map((plugin) => plugin.id));
+    for (const id of pluginManifests.keys()) taken.add(id);
+    for (let index = 1; index < 10000; index++) {
+      const suffix = index === 1 ? "-copy" : `-copy-${index}`,
+        stem = pluginId.slice(0, Math.max(1, 64 - suffix.length)).replace(/-+$/, "") || "plugin",
+        candidate = `${stem}${suffix}`;
+      if (!taken.has(candidate)) return candidate;
+    }
+    return "";
+  }
+  function replacePluginFrontmatterField(document, field, value) {
+    const line = `${field}: ${String(value).trim().replace(/[\r\n]/g, " ")}`,
+      pattern = new RegExp(`^${field}:[^\\r\\n]*$`, "m");
+    if (pattern.test(document)) return document.replace(pattern, line);
+    return document.replace(/^(name:[^\r\n]*\r?\n)/m, (match) => `${match}${line}\n`);
+  }
+  function createPluginCopy(pluginId) {
+    if (state.pluginAuthoringBusy) return false;
+    const plugin = PLUGIN_DEFINITIONS.find((item) => item.id === pluginId),
+      manifest = pluginManifests.get(pluginId);
+    if (!plugin?.documentPath || !manifest?.document) return false;
+    const copyId = nextPluginCopyId(pluginId);
+    if (!copyId) return false;
+    const sourceName = localizedManifestValue(manifest, "name") || manifest.name || pluginId,
+      copyName = t("pluginCopyName").replace("{name}", sourceName),
+      escapedId = pluginId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+      pluginIdPattern = new RegExp(`(pluginId\\s*:\\s*["'])${escapedId}(["'])`, "g");
+    let document = manifest.document.replace(/^id:[^\r\n]*$/m, `id: ${copyId}`);
+    document = document.replace(pluginIdPattern, `$1${copyId}$2`);
+    document = replacePluginFrontmatterField(document, state.language === "zh" ? "name-zh" : "name", copyName);
+    pluginTitle.value = copyName;
+    pluginDocumentEditor.value = document;
+    pluginStylesEditor.value = manifest.styles || "";
+    state.pluginAuthoringStatus = { key:"pluginCopyDraftReady", type:"success", values:{ name:sourceName } };
+    setPluginTab("create");
+    requestAnimationFrame(() => pluginTitle.focus({ preventScroll:true }));
+    return true;
+  }
   function pluginAuthoringText(status) {
     if (!status) return "";
     let text = status.raw || t(status.key);
@@ -1475,17 +1892,54 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
   }
   function pluginDraftValidation() {
     const document = pluginDocumentWithTitle(pluginDocumentEditor.value),
-      bytes = new TextEncoder().encode(document).length;
+      styles = pluginStylesEditor?.value || "",
+      bytes = new TextEncoder().encode(document).length,
+      styleBytes = new TextEncoder().encode(styles).length;
     try {
       if (!PLUGINS?.parse) throw Error("Plugin parser is unavailable");
-      const manifest = PLUGINS.parse(document);
+      const manifest = PLUGINS.parse(document, styles);
       if (PLUGIN_DEFINITIONS.some((plugin) => plugin.id === manifest.id && plugin.builtIn !== false) || ["animation", "general"].includes(manifest.id)) throw Error(t("pluginIdReserved").replace("{id}", manifest.id));
       if (pluginManifests.has(manifest.id)) throw Error(t("pluginIdExists").replace("{id}", manifest.id));
-      return { bytes, manifest, document, error:"" };
+      return { bytes, styleBytes, manifest, document, styles:manifest.styles, error:"" };
     } catch (error) {
-      return { bytes, manifest:null, error:error.message || String(error) };
+      return { bytes, styleBytes, manifest:null, error:error.message || String(error) };
     }
   }
+  function updatePluginStylesPreview(validation) {
+    if (!pluginStylesPreview) return;
+    const css = validation?.manifest?.styles || "";
+    pluginStylesPreviewPayload = {
+      type:"penecho-widget-init",
+      title:t("pluginStylesPreview"),
+      html:`<!doctype html><meta charset="utf-8"><style>
+      *{box-sizing:border-box}body{margin:0;padding:22px;background:#fff;color:#172033;font:16px/1.45 system-ui,sans-serif}
+      .plugin-css-preview{display:grid;gap:16px}.preview-row{display:flex;flex-wrap:wrap;align-items:center;gap:12px}
+      .preview-node{padding:12px 16px;border:2px solid #64748b;border-radius:6px;background:#f8fafc;font-weight:700}
+      .preview-muted{color:#64748b}.preview-accent{color:#2563eb}
+    </style><main class="plugin-css-preview pd-root" data-pd-palette="standard" data-pd-density="comfortable">
+      <h2 class="pd-title">Plugin style preview</h2><p class="pd-subtitle preview-muted">Typography, semantic nodes, labels and palette variables</p>
+      <div class="preview-row pd-stage"><span class="preview-node pd-node pd-node--service">Service</span><span class="pd-edge-label">request</span><span class="preview-node pd-node pd-node--database">Database</span></div>
+      <div class="preview-row"><span class="pd-badge pd-badge--info preview-accent">Info</span><span class="pd-badge pd-badge--success">Success</span><span class="pd-badge pd-badge--warning">Warning</span><span class="pd-badge pd-badge--danger">Error</span></div>
+    </main>`,
+      pluginStyles:css,
+    };
+    if (!pluginStylesPreview.getAttribute("src")) {
+      pluginStylesPreviewReady = false;
+      pluginStylesPreview.src = new URL("widget-host.html", location.href).href;
+    }
+    sendPluginStylesPreview();
+  }
+  function sendPluginStylesPreview() {
+    if (!pluginStylesPreviewReady || !pluginStylesPreviewPayload || !pluginStylesPreview?.contentWindow) return false;
+    pluginStylesPreview.contentWindow.postMessage(pluginStylesPreviewPayload, location.origin);
+    return true;
+  }
+  function handlePluginStylesPreviewMessage(event) {
+    if (event.source !== pluginStylesPreview?.contentWindow || event.origin !== location.origin || event.data?.type !== "penecho-widget-host-ready") return;
+    pluginStylesPreviewReady = true;
+    sendPluginStylesPreview();
+  }
+  window.addEventListener("message", handlePluginStylesPreviewMessage);
   function updatePluginAuthoringUi() {
     const validation = pluginDraftValidation(),
       status = state.pluginAuthoringStatus || (validation.manifest
@@ -1498,14 +1952,20 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       button.disabled = state.pluginAuthoringBusy;
     }
     pluginDocumentBytes.textContent = t("pluginBytes").replace("{bytes}", String(validation.bytes));
-    pluginDocumentBytes.classList.toggle("invalid", validation.bytes > 3000);
+    pluginDocumentBytes.classList.toggle("invalid", validation.bytes > 12000);
+    pluginStylesBytes.textContent = t("pluginStylesBytes").replace("{bytes}", String(validation.styleBytes));
+    pluginStylesBytes.classList.toggle("invalid", validation.styleBytes > 32000);
     pluginDocumentStatus.textContent = pluginAuthoringText(status);
     pluginDocumentStatus.className = status.type || "";
     pluginTitle.disabled = state.pluginAuthoringBusy;
     pluginDocumentEditor.disabled = state.pluginAuthoringBusy;
+    pluginStylesEditor.disabled = state.pluginAuthoringBusy;
+    pluginStylesUploadButton.disabled = state.pluginAuthoringBusy;
+    pluginStylesUpload.disabled = state.pluginAuthoringBusy;
     pluginImprove.disabled = state.pluginAuthoringBusy || !pluginDocumentEditor.value.trim() || validation.bytes > 12000;
     pluginSave.disabled = state.pluginAuthoringBusy || state.pluginCatalogLoading || !validation.manifest;
     for (const tab of [pluginLocalTab, pluginCreateTab, pluginServerTab]) tab.disabled = state.pluginAuthoringBusy;
+    updatePluginStylesPreview(validation);
     return validation;
   }
   function setPluginAuthoringStatus(key, type = "", values = {}, raw = "") {
@@ -1517,9 +1977,44 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     state.pluginAuthoringTemplate = template;
     state.pluginAuthoringStatus = null;
     pluginDocumentEditor.value = PLUGIN_TEMPLATE_DOCUMENTS[template];
+    pluginStylesEditor.value = PLUGIN_TEMPLATE_STYLES[template] || "";
     syncPluginTitleFromDocument(pluginDocumentEditor.value);
     updatePluginAuthoringUi();
     return true;
+  }
+  async function importPluginStylesFile(file) {
+    if (!(file instanceof Blob) || state.pluginAuthoringBusy) return false;
+    const name = String(file.name || "styles.css"),
+      isCss = /\.css$/i.test(name) || file.type === "text/css";
+    if (!isCss) {
+      setPluginAuthoringStatus("pluginStylesFileType", "error");
+      return false;
+    }
+    if (file.size > 32000) {
+      setPluginAuthoringStatus("pluginStylesFileTooLarge", "error");
+      return false;
+    }
+    try {
+      const styles = await file.text();
+      if (new TextEncoder().encode(styles).length > 32000) {
+        setPluginAuthoringStatus("pluginStylesFileTooLarge", "error");
+        return false;
+      }
+      pluginStylesEditor.value = styles;
+      state.pluginAuthoringStatus = null;
+      const validation = pluginDraftValidation();
+      if (!validation.manifest) {
+        setPluginAuthoringStatus("pluginDraftInvalid", "error", { error:validation.error });
+        return false;
+      }
+      setPluginAuthoringStatus("pluginStylesImported", "success", { name });
+      return true;
+    } catch (error) {
+      setPluginAuthoringStatus("pluginStylesReadFailed", "error", { error:error.message || String(error) });
+      return false;
+    } finally {
+      pluginStylesUpload.value = "";
+    }
   }
   async function pluginJsonResponse(response) {
     let body = null;
@@ -1529,8 +2024,9 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
   }
   async function improvePluginDraft() {
     if (state.pluginAuthoringBusy) return false;
-    const document = pluginDocumentWithTitle(pluginDocumentEditor.value);
-    if (!document.trim() || new TextEncoder().encode(document).length > 12000) return false;
+    const document = pluginDocumentWithTitle(pluginDocumentEditor.value),
+      styles = pluginStylesEditor.value;
+    if (!document.trim() || new TextEncoder().encode(document).length > 12000 || new TextEncoder().encode(styles).length > 32000) return false;
     state.pluginAuthoringBusy = true;
     setPluginAuthoringStatus("pluginImproving");
     try {
@@ -1538,10 +2034,12 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
         method:"POST",
         credentials:"same-origin",
         headers:authenticatedApiHeaders({ "Content-Type":"application/json" }),
-        body:JSON.stringify({ document, reasoningEffort:state.reasoningEffort }),
+        body:JSON.stringify({ document, styles, reasoningEffort:state.reasoningEffort }),
       }), body = await pluginJsonResponse(response);
-      if (typeof body?.document !== "string") throw Error("The AI response did not contain a plugin document");
+      if (typeof body?.document !== "string" || typeof body?.styles !== "string") throw Error("The AI response did not contain a complete plugin bundle");
+      PLUGINS.parse(body.document, body.styles);
       pluginDocumentEditor.value = body.document;
+      pluginStylesEditor.value = body.styles;
       syncPluginTitleFromDocument(body.document);
       state.pluginAuthoringStatus = { key:"pluginImproved", type:"success", values:{} };
       return true;
@@ -1565,9 +2063,9 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
         method:"POST",
         credentials:"same-origin",
         headers:authenticatedApiHeaders({ "Content-Type":"application/json" }),
-        body:JSON.stringify({ document:validation.document }),
+        body:JSON.stringify({ document:validation.document, styles:validation.styles }),
       }), body = await pluginJsonResponse(response), savedId = body?.plugin?.id;
-      if (typeof savedId !== "string" || !await loadPluginDocuments() || !setPluginEnabled(savedId, true)) throw Error("The plugin was saved, but the local catalog could not be refreshed");
+      if (typeof savedId !== "string" || !await loadPluginDocuments() || !await setPluginEnabled(savedId, true)) throw Error("The plugin was saved, but the local catalog could not be refreshed");
       state.pluginAuthoringStatus = { key:"pluginSaved", type:"success", values:{ name:localizedManifestValue(validation.manifest, "name") || validation.manifest.name } };
       setPluginTab("local");
       return true;
@@ -1631,6 +2129,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       button.classList.toggle("active", active);
       button.setAttribute("aria-selected", String(active));
       panel.hidden = !active;
+      if (active) panel.scrollTop = 0;
     }
     if (selected === "create") updatePluginAuthoringUi();
   }
@@ -1673,7 +2172,6 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
   }
   function applyAnimationPluginState(enabled) {
     if (!enabled) {
-      cancelAnimationTouchHold();
       if (state.animationEdit) acceptAnimationEdit();
       discardPendingAnimationDrafts();
       hideAnimationControls();
@@ -1689,6 +2187,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     requestRender();
   }
   function applyWidgetPluginState(pluginId, enabled) {
+    if (!enabled && state.activeAI?.widgetEdit?.pluginId === pluginId) cancelWidgetRefinement("widget-plugin-disabled");
     if (!enabled && state.pendingWidget?.pluginId === pluginId) rejectPendingWidget();
     if (!enabled && selectedWidget()?.pluginId === pluginId) acceptWidgetEdit();
     for (const widget of state.widgets) {
@@ -1699,10 +2198,18 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     syncWidgetRuntime();
     requestRender();
   }
-  function setPluginEnabled(pluginId, enabled) {
+  async function setPluginEnabled(pluginId, enabled) {
     const plugin = PLUGIN_DEFINITIONS.find((item) => item.id === pluginId);
     if (!plugin) return false;
     if (enabled && plugin.documentPath && !pluginManifests.has(pluginId)) return false;
+    if (enabled) {
+      try { await ensurePluginRuntime(pluginId); }
+      catch (error) {
+        state.pluginCatalogError = error.message;
+        updatePluginControl();
+        return false;
+      }
+    }
     state.plugins[pluginId] = Boolean(enabled);
     persistPluginSettings();
     if (plugin.documentPath) applyWidgetPluginState(pluginId, state.plugins[pluginId]);
@@ -1758,6 +2265,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     if (state.statusKey) status.textContent = t(state.statusKey);
     updateSelectionToolbar();
     updateFeatureTourLanguage();
+    summonFX?.refreshText();
     positionAnimationControls();
     requestInteractionLayerRender();
   }
@@ -1814,6 +2322,8 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     state.busy = Boolean(value);
     embodiment.classList.toggle("working", state.busy);
     embodiment.setAttribute("aria-busy", String(state.busy));
+    if (state.busy) showSummon();
+    else hideSummon();
   }
   function setNavigating(value) {
     clearTimeout(state.navigationTimer);
@@ -1853,6 +2363,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     return true;
   }
   function invokeAIAction(action) {
+    cancelWidgetRefinement("manual-action");
     if (state.selection?.phase === "active") {
       const selection = state.selection,
         packed = buildSelectionTypesetRequest(selection);

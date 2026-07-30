@@ -45,9 +45,6 @@
               <option value="studio" data-i18n="themeStudio" selected>Studio</option>
           </select>
         </label>
-        <button id="tourReplayBtn" class="tour-replay-button" type="button" data-i18n-aria="tourReplay" aria-label="Feature tour" data-i18n-title="tourReplay" title="Feature tour">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2.1 4.9-4.9 2.1 2.1-4.9 4.9-2.1Z"/></svg>
-        </button>
         <span id="canvasFileActions" class="canvas-file-actions">
           <button id="newCanvasBtn" class="icon-button utility-icon" type="button" data-i18n-aria="newCanvas" aria-label="New canvas" data-i18n-title="newCanvas" title="New canvas">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6Z"/><path d="M14 3v4h4M9 14h6M12 11v6"/></svg>
@@ -62,6 +59,9 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4Z"/><path d="M8 5V3h8v2M8 10h8M8 14h6"/></svg>
           </button>
         </span>
+        <button id="settingsBtn" class="icon-button utility-icon" type="button" data-i18n-aria="settingsTitle" aria-label="Settings" data-i18n-title="settingsTitle" title="Settings" aria-expanded="false" aria-controls="settingsPanel">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z"/></svg>
+        </button>
       </header>
 
       <nav class="toolbar" data-i18n-aria="boardTools" aria-label="Board tools">
@@ -98,14 +98,6 @@
               <span data-i18n="plugins">Plugins</span>
             </button>
           </div>
-          <label><span data-i18n="font">Font</span>
-            <select id="aiFont" data-i18n-aria="aiFont" aria-label="AI font">
-              <option value="ui-rounded, system-ui, sans-serif" data-i18n="fontRounded">Rounded</option>
-              <option value="Segoe Print, Comic Sans MS, cursive" data-i18n="fontHand">Handwritten</option>
-              <option value="Georgia, serif" data-i18n="fontSerif">Classic serif</option>
-              <option value="system-ui, sans-serif" data-i18n="fontSans">Sans serif</option>
-            </select>
-          </label>
           </div>
           <div class="mode-tools">
             <button id="handToolBtn" data-mode="hand" class="icon-button" type="button" aria-pressed="false" data-i18n-aria="hand" aria-label="Hand tool: move canvas and objects" data-i18n-title="hand" title="Hand tool: move canvas and objects">
@@ -125,6 +117,9 @@
             </button>
             <button id="imagePickerBtn" class="icon-button" type="button" data-i18n-aria="addImage" aria-label="Add image or photo" data-i18n-title="addImage" title="Add image or photo">
               <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m4 17 5-5 4 4 2-2 5 5"/></svg>
+            </button>
+            <button id="clipboardCopyBtn" class="icon-button" type="button" data-i18n-aria="copyFromClipboard" aria-label="Copy from clipboard" data-i18n-title="copyFromClipboard" title="Copy from clipboard">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="16" rx="2"/><path d="M9 5V3h6v2M9 10h6M9 14h6M9 18h4"/></svg>
             </button>
             <input id="imagePickerInput" type="file" accept="image/*" hidden>
           </div>
@@ -186,10 +181,18 @@
     <div id="historyBackdrop" class="history-backdrop" hidden></div>
     <aside id="historyPanel" class="history-panel" aria-hidden="true" aria-labelledby="historyTitle">
       <header>
-        <div><span class="history-kicker">PenEcho</span><h2 id="historyTitle" data-i18n="historyTitle">Local canvas history</h2></div>
+        <div><span class="history-kicker">PenEcho</span><h2 id="historyTitle" data-i18n="historyTitle">Canvas history</h2></div>
         <button id="historyClose" type="button" data-i18n-aria="closeHistory" aria-label="Close history" data-i18n-title="closeHistory" title="Close history">×</button>
       </header>
       <p data-i18n="historyDescription">Stores confirmed canvas content only. Unconfirmed AI drafts are excluded.</p>
+      <fieldset class="snapshot-location" aria-describedby="historyStorageDescription">
+        <legend data-i18n="saveLocation">Save location</legend>
+        <div class="snapshot-location-options">
+          <label><input type="radio" name="historyStorageLocation" value="device"><span data-i18n="storageThisDevice">This device</span></label>
+          <label><input type="radio" name="historyStorageLocation" value="server"><span data-i18n="storagePenEchoServer">PenEcho server</span></label>
+        </div>
+        <p id="historyStorageDescription" class="snapshot-location-description"></p>
+      </fieldset>
       <div class="history-save-row">
         <input id="historyName" type="text" maxlength="48" data-i18n-placeholder="snapshotName" placeholder="Snapshot name (optional)" data-i18n-aria="snapshotName" aria-label="Snapshot name">
         <button id="historySaveCurrent" type="button" data-i18n="saveCurrentSnapshot">Save</button>
@@ -208,6 +211,14 @@
         </header>
         <p data-i18n="newCanvasDescription">Save confirmed content before starting over. Unconfirmed AI drafts are not included.</p>
         <p id="currentSnapshotLabel" class="current-snapshot"></p>
+        <fieldset class="snapshot-location" aria-describedby="newCanvasStorageDescription">
+          <legend data-i18n="saveLocation">Save location</legend>
+          <div class="snapshot-location-options">
+            <label><input type="radio" name="newCanvasStorageLocation" value="device"><span data-i18n="storageThisDevice">This device</span></label>
+            <label><input type="radio" name="newCanvasStorageLocation" value="server"><span data-i18n="storagePenEchoServer">PenEcho server</span></label>
+          </div>
+          <p id="newCanvasStorageDescription" class="snapshot-location-description"></p>
+        </fieldset>
         <label class="new-snapshot-name" for="newSnapshotName"><span data-i18n="newSnapshotName">Name for new snapshot (optional)</span>
           <input id="newSnapshotName" type="text" maxlength="48" data-i18n-placeholder="snapshotName" placeholder="Snapshot name (optional)">
         </label>
@@ -251,7 +262,11 @@
         <canvas id="screen"></canvas>
         <canvas id="animationLayer" class="animation-layer" aria-hidden="true"></canvas>
         <div id="widgetLayer" class="widget-layer" hidden aria-live="polite"></div>
+        <canvas id="summonLayer" class="summon-layer" hidden aria-hidden="true"></canvas>
+        <canvas id="inkLayer" class="ink-layer" aria-hidden="true"></canvas>
         <canvas id="interactionLayer" class="interaction-layer" aria-hidden="true"></canvas>
+        <div id="objectChromeLayer" class="object-chrome-layer"></div>
+        <div id="summonTextLayer" class="summon-text-layer" aria-hidden="true"></div>
         <div id="animationControls" class="animation-controls" hidden role="toolbar" data-i18n-aria="animationControls" aria-label="Animation controls">
           <button id="animationPlayPause" type="button" data-i18n="animationPause">Pause</button>
           <button id="animationRestart" type="button" data-i18n="animationRestart">Restart</button>
@@ -260,7 +275,7 @@
         <div id="imageEditBar" class="image-edit-bar" hidden role="toolbar" data-i18n-aria="imageEditBarLabel" aria-label="Image actions">
           <button id="imagePlaceBtn" class="image-action primary" type="button">
             <span class="image-action-title" data-i18n="imagePlace">Place image</span>
-            <span class="image-action-hint" data-i18n="imagePlaceHint">Keep it as an image; long-press to edit again</span>
+            <span class="image-action-hint" data-i18n="imagePlaceHint">Keep it as an image; use Hand and its top handle to edit again</span>
           </button>
           <button id="imageMergeBtn" class="image-action merge" type="button">
             <span class="image-action-title" data-i18n="imageMerge">Merge into ink</span>
@@ -369,9 +384,25 @@
             <textarea id="pluginDocumentEditor" rows="18" spellcheck="false" aria-describedby="pluginDocumentHint pluginDocumentStatus"></textarea>
           </label>
           <div class="plugin-editor-meta">
-            <span id="pluginDocumentHint" data-i18n="pluginDocumentHint">Prefer Improve with AI before saving. The final document needs frontmatter, an exact One-shot example, and no more than 3000 UTF-8 bytes.</span>
-            <output id="pluginDocumentBytes" for="pluginDocumentEditor">0 / 3000 bytes</output>
+            <span id="pluginDocumentHint" data-i18n="pluginDocumentHint">Prefer Improve with AI before saving. The final document needs frontmatter and an exact One-shot example.</span>
+            <output id="pluginDocumentBytes" for="pluginDocumentEditor">0 / 12000 bytes</output>
           </div>
+          <label class="plugin-editor-field" for="pluginStylesEditor">
+            <span data-i18n="pluginStylesLabel">Plugin CSS (optional)</span>
+            <textarea id="pluginStylesEditor" class="plugin-styles-editor" rows="10" spellcheck="false" aria-describedby="pluginStylesHint pluginDocumentStatus"></textarea>
+          </label>
+          <div class="plugin-editor-meta plugin-styles-meta">
+            <div class="plugin-styles-help">
+              <button id="pluginStylesUploadButton" class="plugin-css-import" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0-4 4m4-4 4 4M5 15v4h14v-4"/></svg>
+                <span data-i18n="pluginStylesImport">Import .css</span>
+              </button>
+              <input id="pluginStylesUpload" type="file" accept=".css,text/css" hidden>
+              <span id="pluginStylesHint" data-i18n="pluginStylesHint">Saved CSS is injected only when this plugin's widget is mounted; it does not load at canvas startup. Edit here or import a .css file. Put external JS/CSS URLs in generated widget HTML.</span>
+            </div>
+            <output id="pluginStylesBytes" for="pluginStylesEditor pluginStylesUpload">0 / 32000 bytes</output>
+          </div>
+          <iframe id="pluginStylesPreview" class="plugin-styles-preview" title="Plugin CSS preview" data-i18n-title="pluginStylesPreview"></iframe>
           <div class="plugin-create-actions">
             <span id="pluginDocumentStatus" role="status" aria-live="polite"></span>
             <button id="pluginImprove" class="plugin-secondary-action" type="button" data-i18n="improvePluginWithAi">Improve with AI</button>
@@ -385,6 +416,53 @@
         <h3 data-i18n="serverPluginsComingTitle">Server plugin marketplace is coming</h3>
         <p data-i18n="serverPluginsComingDescription">Published plugins, free or points-priced downloads, server selection, trust details, and updates will appear here after the PenEcho website launches.</p>
       </section>
+    </section>
+  </div>
+  <div id="settingsLayer" class="settings-layer" hidden aria-hidden="true">
+    <div id="settingsBackdrop" class="settings-backdrop"></div>
+    <section id="settingsPanel" class="settings-panel" role="dialog" data-i18n-aria="settingsTitle" aria-label="Settings" aria-labelledby="settingsTitle" tabindex="-1">
+      <header>
+        <h2 id="settingsTitle" data-i18n="settingsTitle">Settings</h2>
+        <button id="settingsClose" class="settings-close" type="button" data-i18n-aria="settingsClose" aria-label="Close settings" data-i18n-title="settingsClose" title="Close settings">×</button>
+      </header>
+      <div class="settings-scroll">
+        <section class="settings-group" aria-labelledby="settingsAiHeading">
+          <h3 id="settingsAiHeading" data-i18n="settingsAISection">AI</h3>
+          <div class="settings-row">
+            <span id="settingsAutoLabel" data-i18n="autoAI">Auto AI</span>
+            <button id="settingsAutoToggle" class="settings-switch on" type="button" role="switch" aria-checked="true" aria-labelledby="settingsAutoLabel"><span class="settings-switch-thumb" aria-hidden="true"></span></button>
+          </div>
+          <label class="settings-row" for="aiFont">
+            <span data-i18n="aiFont">AI font</span>
+            <select id="aiFont" data-i18n-aria="aiFont" aria-label="AI font">
+              <option value="ui-rounded, system-ui, sans-serif" data-i18n="fontRounded">Rounded</option>
+              <option value="Segoe Print, Comic Sans MS, cursive" data-i18n="fontHand">Handwritten</option>
+              <option value="Georgia, serif" data-i18n="fontSerif">Classic serif</option>
+              <option value="system-ui, sans-serif" data-i18n="fontSans">Sans serif</option>
+            </select>
+          </label>
+        </section>
+        <section class="settings-group" aria-labelledby="settingsSummonHeading">
+          <h3 id="settingsSummonHeading" data-i18n="settingsSummonSection">Thinking indicator</h3>
+          <div class="settings-row">
+            <span id="summonToggleLabel" data-i18n="settingsSummonEnabled">Show while AI thinks</span>
+            <button id="summonToggle" class="settings-switch on" type="button" role="switch" aria-checked="true" aria-labelledby="summonToggleLabel"><span class="settings-switch-thumb" aria-hidden="true"></span></button>
+          </div>
+          <p class="settings-note" data-i18n="settingsSummonDescription">A changing mathematical form and quiet text appear while each request runs.</p>
+        </section>
+        <section class="settings-group" aria-labelledby="settingsHelpHeading">
+          <h3 id="settingsHelpHeading" data-i18n="settingsHelpSection">Help &amp; about</h3>
+          <div class="settings-actions">
+            <button id="settingsTourBtn" type="button" data-i18n="tourReplay">Feature tour</button>
+            <button id="settingsChangelogBtn" type="button" data-i18n="settingsChangelog">What's new</button>
+          </div>
+          <div class="settings-links">
+            <a href="https://github.com/penecho/penecho/releases/latest" target="_blank" rel="noopener noreferrer" data-i18n="settingsDownloadMac">Download for macOS</a>
+            <a href="https://github.com/penecho/penecho/releases/latest" target="_blank" rel="noopener noreferrer" data-i18n="settingsDownloadWin">Download for Windows</a>
+            <a href="https://github.com/penecho/penecho" target="_blank" rel="noopener noreferrer" data-i18n="settingsGitHub">GitHub repository</a>
+          </div>
+        </section>
+      </div>
     </section>
   </div>
   <div id="tourLayer" class="tour-layer" hidden aria-hidden="true">
@@ -412,29 +490,34 @@
       <header class="changelog-header">
         <div class="changelog-heading">
           <span class="changelog-badge" data-i18n="changelogBadge">What's new</span>
-          <span class="changelog-version">0.7.2</span>
+          <span class="changelog-version">0.8.0</span>
         </div>
         <button id="changelogClose" class="changelog-close" type="button" data-i18n-aria="changelogClose" aria-label="Close release notes" data-i18n-title="changelogClose" title="Close release notes">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
         </button>
       </header>
       <div class="changelog-scroll">
-        <h2 id="changelogTitle" data-i18n="changelogTitle">Real photos, flowcharts, and smoother canvas work</h2>
-        <p id="changelogIntro" class="changelog-intro" data-i18n="changelogIntro">Version 0.7.2 adds built-in visual tools, more reliable canvas persistence, and simpler local access.</p>
+        <h2 id="changelogTitle" data-i18n="changelogTitle">Professional diagrams, editable source, and precise refinement</h2>
+        <p id="changelogIntro" class="changelog-intro" data-i18n="changelogIntro">Version 0.8.0 expands PenEcho from flowcharts into professional engineering, scientific, software, and business diagrams.</p>
+        <div class="changelog-demo">
+          <img src="https://github.com/penecho/penecho/releases/download/v0.1.0/penecho_plugins.webp" alt="PenEcho professional diagrams demo" loading="eager" decoding="async">
+        </div>
+        <p class="changelog-plugin-note" data-i18n="changelogPluginEnableNote">Professional Diagrams is on by default. You can turn it off at any time from Plugins.</p>
         <section class="changelog-release" aria-labelledby="changelogCurrentVersion">
-          <h3 id="changelogCurrentVersion">0.7.2</h3>
+          <h3 id="changelogCurrentVersion">0.8.0</h3>
           <ul>
-            <li data-i18n="changelogVisualPlugins">Use built-in Real Photo Search for sourced web images and Flowchart for professional diagrams with copyable Mermaid source.</li>
-            <li data-i18n="changelogCanvasWorkflow">Move AI widgets directly with Hand, resize images and widgets freely, and preserve remote images when saving, loading, or exporting the canvas.</li>
-            <li data-i18n="changelogDesktopAccess">Protect local and LAN access with a six-digit code, connect through Kimi API or Kimi CLI, and use improved desktop updates and packaging.</li>
+            <li data-i18n="changelogVisualPlugins">Professional Diagrams chooses an appropriate editable domain format, renders supported formats locally, and preserves copyable professional source for specialized HTML diagrams.</li>
+            <li data-i18n="changelogCanvasWorkflow">Draw or describe the professional diagram you need; PenEcho chooses a suitable format and returns it as a canvas widget.</li>
+            <li data-i18n="changelogPluginRefine">Plugin-returned widgets can be refined directly: draw the requested changes over the widget with the Pen, then click the Refine button that appears. This workflow applies only to plugin widgets.</li>
+            <li data-i18n="changelogDesktopAccess">Professional Diagrams is second in the plugin list and on by default; its compact guide adds about 1.5k–2k prompt tokens per request, while full CSS and renderers stay local.</li>
           </ul>
         </section>
         <section class="changelog-release changelog-earlier" aria-labelledby="changelogEarlierTitle">
           <h3 id="changelogEarlierTitle" data-i18n="changelogEarlierTitle">Earlier highlights</h3>
           <ul>
-            <li data-i18n="changelogImagesSummary">0.7.1 added local images and photos with canvas-native editing, snapshots, and PNG export.</li>
-            <li data-i18n="changelogPluginsSummary">0.7.0 introduced the plugin system: sandboxed HTML widgets and focused data plugins for richer live and interactive work.</li>
-            <li data-i18n="changelogAnimation">0.6.0 introduced controllable, persistent animation scenes with a safe declarative Canvas2D renderer.</li>
+            <li data-i18n="changelogImagesSummary">0.7.2 added sourced web photos, more reliable canvas persistence and export, and simpler protected local access.</li>
+            <li data-i18n="changelogPluginsSummary">0.7.1 added local images and photos with canvas-native editing, snapshots, PNG export, and early copyable flowcharts.</li>
+            <li data-i18n="changelogAnimation">0.7.0 introduced sandboxed HTML plugins; 0.6.0 introduced controllable declarative animation scenes.</li>
           </ul>
         </section>
       </div>
@@ -451,6 +534,7 @@
   <script src="mixed-text.js"></script>
   <script src="animation.js"></script>
   <script src="plugins.js"></script>
+  <script src="summon.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

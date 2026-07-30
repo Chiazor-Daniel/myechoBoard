@@ -21,10 +21,15 @@
   }
   function launchAutomaticAI(reason) {
     if (!state.auto || !state.dirty || !state.autoEligible || state.drawing) return;
+    if (currentWidgetRefineCandidate()) {
+      if (state.statusKey !== "widgetRefinePending") setStatusKey("widgetRefinePending");
+      return;
+    }
     if (hasUnsettledToolbox()) {
       if (state.statusKey !== "autoToolboxPending") setStatusKey("autoToolboxPending");
       return;
     }
+    clearWidgetRefineCandidate();
     supersedeActiveAI(reason);
     requestAI("auto");
   }
@@ -32,6 +37,10 @@
     clearTimeout(state.timer);
     state.timer = 0;
     if (!state.auto || !state.dirty || !state.autoEligible) return;
+    if (currentWidgetRefineCandidate()) {
+      if (state.statusKey !== "widgetRefinePending") setStatusKey("widgetRefinePending");
+      return;
+    }
     state.timer = setTimeout(() => {
       state.timer = 0;
       launchAutomaticAI("new-stroke-deadline");
@@ -65,20 +74,32 @@
       bottom = Math.min(a.y + a.h, b.y + b.h);
     return right > x && bottom > y ? { x, y, w: right - x, h: bottom - y } : null;
   }
+  function containsRect(outer, inner) {
+    return Boolean(outer && inner
+      && inner.x >= outer.x && inner.y >= outer.y
+      && inner.x + inner.w <= outer.x + outer.w
+      && inner.y + inner.h <= outer.y + outer.h);
+  }
   async function requestAI(action, packedOverride = null, requestOptions = null) {
     requestOptions = requestOptions || {};
+    clearWidgetRefineCandidate();
     const automatic = action === "auto",
       isolatedSelection = Boolean(requestOptions.isolatedSelection),
       oneShotInput = Boolean(requestOptions.oneShotInput),
       captureCurrentViewport = Boolean(requestOptions.captureCurrentViewport),
+      widgetEditTarget = requestOptions.widgetEditTarget || null,
+      widgetEditContext = requestOptions.widgetEditContext || null,
       revision = state.userRevision,
       recognitionGeneration = state.recognitionGeneration,
       aiColor = state.aiColor,
       dirtySnapshot = state.dirty ? { ...state.dirty } : null,
       latestBox = dirtySnapshot || state.lastUserBox,
+      attentionBox = dirtySnapshot || (captureCurrentViewport ? null : latestBox),
       hotspotCount = isolatedSelection ? 0 : state.hotspotTrail.length,
-      packed = packedOverride || (captureCurrentViewport ? buildViewportImage(state.hotspotTrail.slice(0, hotspotCount), null, true) : latestBox ? buildViewportImage(state.hotspotTrail.slice(0, hotspotCount), latestBox) : null),
-      typedInput = isolatedSelection || (captureCurrentViewport && state.latestTypedInput && (!packed?.sourceRect || !intersection(state.latestTypedInput.box, packed.sourceRect))) ? null : state.latestTypedInput,
+      packed = packedOverride || (captureCurrentViewport || attentionBox ? buildViewportImage(state.hotspotTrail.slice(0, hotspotCount), attentionBox, captureCurrentViewport) : null),
+      typedInput = !isolatedSelection && state.latestTypedInput && containsRect(packed?.sourceRect, state.latestTypedInput.box)
+        ? state.latestTypedInput
+        : null,
       preservedRecognition = isolatedSelection
         ? {
             dirty: state.dirty ? { ...state.dirty } : null,
@@ -88,6 +109,13 @@
             latestTypedInput: state.latestTypedInput,
           }
         : null;
+    if (pluginEnabled("flowchart")) {
+      try { await ensurePluginRuntime("flowchart"); }
+      catch (error) {
+        setStatus(`${t("aiError")}${error.message}`);
+        return;
+      }
+    }
     if (!packed) {
       discardUncapturableInput(hotspotCount, Boolean(dirtySnapshot));
       if (preservedRecognition) {
@@ -104,12 +132,16 @@
     if (!isolatedSelection) {
       state.dirty = null;
       state.autoEligible = false;
+      if (hotspotCount) state.hotspotTrail.splice(0, hotspotCount);
+      state.latestTypedInput = null;
+      state.lastUserBox = requestBox;
     }
     const controller = new AbortController(),
       // A selection-scoped request never consumes the normal recognition state. Mark its
       // snapshot as already preserved so superseding it cannot merge stale dirty ink back in.
-      run = { controller, dirtySnapshot, recognitionGeneration, superseded: false, dirtyRestored: isolatedSelection, isolatedSelection, oneShotInput, selection: requestOptions.selection || null, selectionRequestToken: requestOptions.selectionRequestToken || null, action };
+      run = { controller, dirtySnapshot, recognitionGeneration, superseded: false, dirtyRestored: true, inputConsumed:!isolatedSelection, isolatedSelection, oneShotInput, selection: requestOptions.selection || null, selectionRequestToken: requestOptions.selectionRequestToken || null, widgetEdit:widgetEditTarget ? { target:widgetEditTarget, targetId:widgetEditTarget.id, pluginId:widgetEditTarget.pluginId, revision } : null, action };
     state.activeAI = run;
+    state.summonAnchor = dirtySnapshot || state.lastUserBox || null;
     setBusy(true);
     setStatusKey(isolatedSelection && action === "normalize" ? "selectionTypesetting" : "observing");
     const timeout = setTimeout(() => controller.abort(), state.aiRequestTimeoutMs);
@@ -125,6 +157,7 @@
             userAction: action,
             ...(state.reasoningEffort === "config" ? {} : { reasoningEffort: state.reasoningEffort }),
             ...pluginRequestPayload(),
+            ...(widgetEditContext ? { widgetEdit:widgetEditContext } : {}),
             ...(typedInput ? { typedInput } : {}),
             canvasSize: { w: SIZE, h: SIZE },
             uiTheme: state.theme,
@@ -144,11 +177,13 @@
         error.status = res.status;
         throw error;
       }
+      // Draft confirmation is a separate interaction after the model request has ended.
+      if (state.activeAI === run) setBusy(false);
       const rawCommands = Array.isArray(data.commands) ? data.commands : [],
         rawCount = rawCommands.length,
         animationLimitReached = pluginEnabled("animation") && state.animations.length >= MAX_VISIBLE_ANIMATIONS && rawCommands.some((command) => (command?.tool || command?.type || command?.name) === "animate_scene"),
-        widgetLimitReached = state.widgets.length >= MAX_VISIBLE_WIDGETS && rawCommands.some((command) => (command?.tool || command?.type || command?.name) === "html_widget"),
-        commands = normalizeCommandPlacements(validate(rawCommands, aiColor), packed, requestBox),
+        widgetLimitReached = !widgetEditTarget && state.widgets.length >= MAX_VISIBLE_WIDGETS && rawCommands.some((command) => ["html_widget", "diagram_source"].includes(command?.tool || command?.type || command?.name)),
+        commands = normalizeCommandPlacements(validate(rawCommands, aiColor, widgetEditTarget, packed.visibleRect), packed, requestBox),
         meta = { requestId: data.requestId };
       if (action === "normalize")
         for (let index = commands.length - 1; index >= 0; index--)
@@ -167,7 +202,7 @@
         tools: commands.map((c) => c.tool),
       });
       if (state.userRevision !== revision) {
-        if (!isolatedSelection && !oneShotInput && state.recognitionGeneration === recognitionGeneration) {
+        if (!isolatedSelection && !oneShotInput && !run.inputConsumed && state.recognitionGeneration === recognitionGeneration) {
           restoreDirty(dirtySnapshot);
           state.autoEligible = Boolean(state.dirty);
           schedule();
@@ -279,6 +314,7 @@
         state.activeAI = null;
         setBusy(false);
       }
+      if (!state.activeAI) state.summonAnchor = null;
     }
   }
   function viewportRect() {
@@ -342,7 +378,7 @@
       columns,
       rows,
       order: "oldest-to-newest",
-      attention: "use only to refine reading order inside latestInput.imageRect",
+      attention: "newest unconsumed pen path; use ordered cells to read and apply every edit inside latestInput.imageRect",
       hotspots: result.slice(-64),
     };
   }
@@ -354,13 +390,14 @@
     const visible = viewportRect();
     if (!visible) return null;
     const captureRect = captureRectFor(latestBox, visible),
-      ink = unionLocalBounds(unionLocalBounds(visibleInkBounds(captureRect), imageBounds(captureRect)), animationBounds(captureRect));
-    if (!captureCurrentViewport && !ink) return null;
+      ink = unionLocalBounds(unionLocalBounds(unionLocalBounds(visibleInkBounds(captureRect), imageBounds(captureRect)), textBoxBounds(captureRect)), animationBounds(captureRect)),
+      useFullViewport = captureCurrentViewport || Boolean(latestBox && !intersection(latestBox, captureRect));
+    if (!useFullViewport && !ink) return null;
     const margin = Math.max(120, Math.min(640, 160 / state.scale)),
-      left = captureCurrentViewport ? captureRect.x : Math.max(captureRect.x, ink.x - margin),
-      top = captureCurrentViewport ? captureRect.y : Math.max(captureRect.y, ink.y - margin),
-      right = captureCurrentViewport ? captureRect.x + captureRect.w : Math.min(captureRect.x + captureRect.w, ink.x + ink.w + margin),
-      bottom = captureCurrentViewport ? captureRect.y + captureRect.h : Math.min(captureRect.y + captureRect.h, ink.y + ink.h + margin),
+      left = useFullViewport ? captureRect.x : Math.max(captureRect.x, ink.x - margin),
+      top = useFullViewport ? captureRect.y : Math.max(captureRect.y, ink.y - margin),
+      right = useFullViewport ? captureRect.x + captureRect.w : Math.min(captureRect.x + captureRect.w, ink.x + ink.w + margin),
+      bottom = useFullViewport ? captureRect.y + captureRect.h : Math.min(captureRect.y + captureRect.h, ink.y + ink.h + margin),
       sourceRect = { x: left, y: top, w: right - left, h: bottom - top },
       // Keep ceil(source * scale) inside the server limits despite floating-point drift.
       imageScale = Math.min(1, MAX_ATLAS_WIDTH / sourceRect.w, MAX_ATLAS_HEIGHT / sourceRect.h) * (1 - Number.EPSILON * 4),
@@ -370,7 +407,7 @@
       },
       out = offscreen(imageSize.w, imageSize.h),
       q = out.getContext("2d");
-    const latestVisible = captureCurrentViewport ? { ...sourceRect } : intersection(latestBox, sourceRect),
+    const latestVisible = latestBox ? intersection(latestBox, sourceRect) || { ...sourceRect } : captureCurrentViewport ? { ...sourceRect } : null,
       captureTime = performance.now();
     if (!latestVisible) return null;
     q.fillStyle = "#fff";
@@ -378,6 +415,8 @@
     q.setTransform(imageScale, 0, 0, imageScale, -sourceRect.x * imageScale, -sourceRect.y * imageScale);
     q.globalAlpha = 0.42;
     drawImagesToContext(q, sourceRect);
+    drawTextBoxesToContext(q, sourceRect);
+    drawWidgetsToContext(q, sourceRect);
     forTiles(sourceRect.x, sourceRect.y, sourceRect.w, sourceRect.h, (c, tx, ty) => q.drawImage(c, tx * TILE, ty * TILE), false);
     drawSharpOverlays(q, sourceRect);
     drawAnimationsToContext(q, sourceRect, captureTime);
@@ -387,6 +426,8 @@
     q.rect(latestVisible.x, latestVisible.y, latestVisible.w, latestVisible.h);
     q.clip();
     drawImagesToContext(q, latestVisible);
+    drawTextBoxesToContext(q, latestVisible);
+    drawWidgetsToContext(q, latestVisible);
     forTiles(latestVisible.x, latestVisible.y, latestVisible.w, latestVisible.h, (c, tx, ty) => q.drawImage(c, tx * TILE, ty * TILE), false);
     drawSharpOverlays(q, latestVisible);
     drawAnimationsToContext(q, latestVisible, captureTime);
@@ -460,7 +501,7 @@
       imageScale,
       changedBox: { ...sourceRect },
       focusInset: null,
-      hotspotGrid: { columns: 8, rows: 8, order: "oldest-to-newest", attention: "use only to refine reading order inside latestInput.imageRect", hotspots: [] },
+      hotspotGrid: { columns: 8, rows: 8, order: "oldest-to-newest", attention: "newest unconsumed pen path; use ordered cells to read and apply every edit inside latestInput.imageRect", hotspots: [] },
       selectionContext: context,
     };
   }
@@ -504,6 +545,7 @@
     q.setTransform(focusScale, 0, 0, focusScale, position.x - focusRect.x * focusScale, position.y - focusRect.y * focusScale);
     q.globalAlpha = 0.32;
     drawImagesToContext(q, focusRect);
+    drawTextBoxesToContext(q, focusRect);
     forTiles(focusRect.x, focusRect.y, focusRect.w, focusRect.h, (c, tx, ty) => q.drawImage(c, tx * TILE, ty * TILE), false);
     q.globalAlpha = 1;
     drawSharpOverlays(q, focusRect);
@@ -513,6 +555,7 @@
     q.rect(latestBox.x, latestBox.y, latestBox.w, latestBox.h);
     q.clip();
     drawImagesToContext(q, latestBox);
+    drawTextBoxesToContext(q, latestBox);
     forTiles(latestBox.x, latestBox.y, latestBox.w, latestBox.h, (c, tx, ty) => q.drawImage(c, tx * TILE, ty * TILE), false);
     q.restore();
     drawSharpOverlays(q, latestBox);
@@ -565,16 +608,54 @@
     if (next.tool === "write_text") next.maxWidth = Math.max(next.fontSize, Math.min(next.maxWidth, SIZE - next.x));
     return [next];
   }
-  function validate(cmds, aiColor = state.aiColor) {
+  function widgetGeometryForViewport(visibleRect) {
+    const bucket = (value) => Math.ceil(Math.min(SIZE, Math.max(1, Number(value) || 1)) / 1000) * 1000,
+      viewportW = bucket(visibleRect?.w), viewportH = bucket(visibleRect?.h);
+    return {
+      max:{ w:Math.max(300,Math.round(viewportW/2)), h:Math.max(200,Math.round(viewportH/2)) },
+    };
+  }
+  function fitWidgetGeometry(command, visibleRect) {
+    if (!command || ![command.x, command.y, command.w, command.h].every(Number.isFinite)) return null;
+    const target = widgetGeometryForViewport(visibleRect).max;
+    let x = Math.round(command.x), y = Math.round(command.y),
+      w = Math.round(command.w),
+      h = Math.round(command.h);
+    if (w <= 0 || h <= 0) {
+      w = 2400;
+      h = 1400;
+    } else if (w < 300 || h < 200) {
+      const scale = Math.max(300 / w, 200 / h);
+      w = Math.ceil(w * scale);
+      h = Math.ceil(h * scale);
+    }
+    if (w > 10000 || h > 10000 || w * h > 40000000) {
+      const scale = Math.min(1, target.w / w, target.h / h, 10000 / w, 10000 / h, Math.sqrt(40000000 / (w * h)));
+      w = Math.floor(w * scale);
+      h = Math.floor(h * scale);
+    }
+    w = Math.max(300, w);
+    h = Math.max(200, h);
+    w = Math.min(w, SIZE);
+    h = Math.min(h, SIZE);
+    x = Math.max(0, Math.min(SIZE - w, x));
+    y = Math.max(0, Math.min(SIZE - h, y));
+    return w >= 300 && h >= 200 ? { x, y, w, h } : null;
+  }
+  function validWidgetRefreshSeconds(value) {
+    return value === 0 || n(value, 60, 86400);
+  }
+  function validate(cmds, aiColor = state.aiColor, widgetEditTarget = null, visibleRect = null) {
     if (!Array.isArray(cmds)) return [];
     let plotPixels = 0,
       animationSlots = pluginEnabled("animation") ? Math.max(0, MAX_VISIBLE_ANIMATIONS - state.animations.length) : 0,
-      widgetSlots = Math.max(0, MAX_VISIBLE_WIDGETS - state.widgets.length),
+      widgetSlots = widgetEditTarget ? 1 : Math.max(0, MAX_VISIBLE_WIDGETS - state.widgets.length),
       widgetPluginIds = new Set(enabledPluginDescriptors().map((plugin) => plugin.id));
     const acceptedTools = pluginEnabled("animation")
       ? ["write_text", "draw_formula", "plot_function", "draw", "animate_scene", "erase"]
       : ["write_text", "draw_formula", "plot_function", "draw", "erase"];
     if (widgetPluginIds.size) acceptedTools.push("html_widget");
+    if (widgetPluginIds.has("flowchart")) acceptedTools.push("diagram_source");
     const validated = cmds
       .slice(0, 16)
       .map((c) => (c && typeof c === "object" ? { ...c, tool: c.tool || c.type || c.name } : c))
@@ -600,7 +681,7 @@
           c.x = Math.min(c.x, Math.max(0, SIZE - estimatedWidth));
           c.y = Math.min(c.y, Math.max(0, SIZE - c.fontSize * 1.8));
         }
-        if (c.tool === "plot_function" && (!n(c.x) || !n(c.y) || !n(c.w, 240, 6000) || !n(c.h, 180, 6000) || c.w * c.h > 8000000 || Math.max(c.w / c.h, c.h / c.w) > 6 || plotPixels + c.w * c.h > 12000000 || c.x + c.w > SIZE || c.y + c.h > SIZE || typeof c.expression !== "string" || c.expression.length > 180)) return null;
+        if (c.tool === "plot_function" && (!n(c.x) || !n(c.y) || !n(c.w, 240, 6000) || !n(c.h, 180, 6000) || c.w * c.h > 8000000 || Math.max(c.w / c.h, c.h / c.w) > 6 || 12000000 < plotPixels + c.w * c.h || c.x + c.w > SIZE || c.y + c.h > SIZE || typeof c.expression !== "string" || c.expression.length > 180)) return null;
         if (c.tool === "plot_function") {
           c.expression = normalizePlotExpression(c.expression);
           try {
@@ -624,19 +705,52 @@
           animationSlots--;
         }
         if (c.tool === "html_widget") {
-          const allowCopy = c.pluginId !== "image-search";
-          if (widgetSlots <= 0 || !widgetPluginIds.has(c.pluginId) || !n(c.x) || !n(c.y) || !n(c.w, 300, 5000) || !n(c.h, 200, 4000) || c.w * c.h > 12000000 || c.x + c.w > SIZE || c.y + c.h > SIZE || typeof c.title !== "string" || !c.title.trim() || c.title.length > 120 || !n(c.refreshSeconds, 60, 86400) || typeof c.html !== "string" || !c.html.trim() || c.html.length > MAX_WIDGET_HTML_LENGTH || allowCopy && c.copyText !== undefined && (typeof c.copyText !== "string" || !c.copyText.trim() || c.copyText.length > MAX_WIDGET_COPY_TEXT_LENGTH) || allowCopy && c.copyLabel !== undefined && (typeof c.copyLabel !== "string" || !c.copyLabel.trim() || c.copyLabel.length > 80)) return null;
+          const allowCopy = c.pluginId !== "image-search",
+            diagramKind = typeof c.diagramKind === "string" ? c.diagramKind.trim() : "",
+            sourceFormat = typeof c.sourceFormat === "string" ? c.sourceFormat.trim() : "",
+            frameworkVersion = typeof c.frameworkVersion === "string" ? c.frameworkVersion.trim() : "",
+            geometry = fitWidgetGeometry(c, visibleRect);
+          if (widgetSlots <= 0 || !widgetPluginIds.has(c.pluginId) || widgetEditTarget && c.pluginId !== widgetEditTarget.pluginId || !geometry || typeof c.title !== "string" || !c.title.trim() || c.title.length > 120 || !validWidgetRefreshSeconds(c.refreshSeconds) || typeof c.html !== "string" || !c.html.trim() || c.html.length > MAX_WIDGET_HTML_LENGTH || diagramKind.length > 80 || sourceFormat.length > 80 || frameworkVersion.length > 120 || allowCopy && c.copyText !== undefined && (typeof c.copyText !== "string" || !c.copyText.trim() || c.copyText.length > MAX_WIDGET_COPY_TEXT_LENGTH) || allowCopy && c.copyLabel !== undefined && (typeof c.copyLabel !== "string" || !c.copyLabel.trim() || c.copyLabel.length > 80) || c.pluginId === "flowchart" && (typeof c.copyText !== "string" || !c.copyText.trim() || !sourceFormat)) return null;
           c = {
             tool:"html_widget",
             pluginId:c.pluginId,
-            x:Math.round(c.x),
-            y:Math.round(c.y),
-            w:Math.round(c.w),
-            h:Math.round(c.h),
+            x:Math.round(widgetEditTarget ? widgetEditTarget.x : geometry.x),
+            y:Math.round(widgetEditTarget ? widgetEditTarget.y : geometry.y),
+            w:Math.round(widgetEditTarget ? widgetEditTarget.w : geometry.w),
+            h:Math.round(widgetEditTarget ? widgetEditTarget.h : geometry.h),
             title:c.title.trim(),
             refreshSeconds:Math.round(c.refreshSeconds),
             html:c.html,
-            ...(allowCopy && typeof c.copyText === "string" ? { copyText:c.copyText.trim(), copyLabel:String(c.copyLabel || "Copy source").trim() } : {}),
+            ...(diagramKind ? { diagramKind } : {}),
+            ...(sourceFormat ? { sourceFormat } : {}),
+            ...(frameworkVersion ? { frameworkVersion } : {}),
+            ...(allowCopy && typeof c.copyText === "string" ? { copyText:c.copyText.trim(), copyLabel:String(c.copyLabel || (sourceFormat ? `Copy ${sourceFormat}` : "Copy source")).trim() } : {}),
+          };
+          widgetSlots--;
+        }
+        if (c.tool === "diagram_source") {
+          const runtime = diagramRuntime();
+          const geometry = fitWidgetGeometry(c, visibleRect),
+            sourceFormat = runtime?.normalizeFormat(c.sourceFormat) || "",
+            diagramKind = typeof c.diagramKind === "string" ? c.diagramKind.trim() : "";
+          if (widgetSlots <= 0 || !widgetPluginIds.has("flowchart") || c.pluginId !== "flowchart"
+            || widgetEditTarget && (widgetEditTarget.pluginId !== "flowchart" || widgetEditTarget.widgetType !== "diagram_source")
+            || !geometry || typeof c.title !== "string" || !c.title.trim() || c.title.length > 120
+            || !sourceFormat || !diagramSourceFits(c.source)
+            || diagramKind.length > 80) return null;
+          c = {
+            tool:"diagram_source",
+            widgetType:"diagram_source",
+            pluginId:"flowchart",
+            x:Math.round(widgetEditTarget ? widgetEditTarget.x : geometry.x),
+            y:Math.round(widgetEditTarget ? widgetEditTarget.y : geometry.y),
+            w:Math.round(widgetEditTarget ? widgetEditTarget.w : geometry.w),
+            h:Math.round(widgetEditTarget ? widgetEditTarget.h : geometry.h),
+            title:c.title.trim(),
+            refreshSeconds:0,
+            sourceFormat,
+            source:c.source,
+            ...(diagramKind ? { diagramKind } : {}),
           };
           widgetSlots--;
         }
@@ -655,8 +769,9 @@
         return c;
       })
       .filter(Boolean);
-    const widget = validated.find((command) => command.tool === "html_widget");
-    return widget ? [widget] : validated;
+    const widgets = validated.filter((command) => ["html_widget", "diagram_source"].includes(command.tool));
+    if (widgetEditTarget) return widgets.length === 1 ? widgets : [];
+    return widgets.length ? [widgets[0]] : validated;
   }
   function point(v) {
     return Array.isArray(v) && v.length === 2 && n(v[0]) && n(v[1]);
@@ -684,9 +799,10 @@
     try {
       checkAI(revision, run);
       if (c.tool === "animate_scene" && !pluginEnabled("animation")) throw Error(AI_REJECTED);
-      if (c.tool === "html_widget") {
+      if (["html_widget", "diagram_source"].includes(c.tool)) {
         if (!pluginEnabled(c.pluginId) || !pluginManifests.has(c.pluginId)) throw Error(AI_REJECTED);
-        const accepted = await startPendingWidget(c, revision);
+        const target = run?.widgetEdit?.target,
+          accepted = target ? await startPendingWidgetReplacement(c, target, revision) : await startPendingWidget(c, revision);
         if (accepted === AI_CANCELLED) throw Error(AI_CANCELLED);
         if (accepted === AI_SUPERSEDED) throw Error(AI_SUPERSEDED);
         if (!accepted) throw Error(AI_REJECTED);
@@ -1205,7 +1321,6 @@
     ctx.strokeRect(b.x, b.y, b.w, b.h);
     ctx.setLineDash([]);
     ctx.restore();
-    drawDraftActions(ctx, b, s, pendingCopyable(p), true);
     ctx.save();
     ctx.strokeStyle = "#2679b8";
     ctx.lineWidth = 1.8 / state.scale;
@@ -1264,7 +1379,6 @@
       ctx.setLineDash(index === p.selectedIndex ? [] : [6 * unit, 6 * unit]);
       ctx.strokeRect(box.x, box.y, box.w, box.h);
       ctx.restore();
-      drawDraftActions(ctx, box, s, pendingCopyable(item));
       drawCopyFeedback(ctx, box, s, item);
     }
     ctx.save();
@@ -1564,9 +1678,12 @@
     }, COPY_FEEDBACK_MS + 30);
     return true;
   }
-  function acceptPending() {
+  function acceptPending(options) {
+    options ||= {};
+    const restoreMode = options?.restoreMode !== false;
     const p = state.pending;
     if (!p) return;
+    const pendingBefore = capturePendingHistoryState();
     blockCanvasInput();
     if (p.revision !== state.userRevision && state.userRevision !== p.latestUserRevision) {
       rejectPending();
@@ -1591,15 +1708,18 @@
     state.pendingGesture = null;
     hideAnimationControls();
     updateBatchActions();
-    save();
+    const historyEntry = save();
+    recordPendingHistory(historyEntry, pendingBefore, capturePendingHistoryState());
     render();
     setStatusKey("merged");
     resolvePending(p, p.items ? { acceptedCount } : true);
+    if (restoreMode) finishAIDraftHandMode();
   }
   function acceptPendingItem(index) {
     const p = state.pending,
       item = p?.items?.[index];
     if (!item) return;
+    const pendingBefore = capturePendingHistoryState();
     blockCanvasInput();
     if (p.revision !== state.userRevision && state.userRevision !== p.latestUserRevision) {
       rejectPending();
@@ -1610,8 +1730,9 @@
     p.acceptedItems = (p.acceptedItems || 0) + 1;
     consumePendingInput(p);
     removePendingItem(p, index);
-    save();
+    const historyEntry = save();
     finishPendingItemAction(p, "itemAccepted");
+    recordPendingHistory(historyEntry, pendingBefore, capturePendingHistoryState());
   }
   function rejectPendingItem(index) {
     const p = state.pending;
@@ -1664,8 +1785,11 @@
     const accepted = Boolean(p.acceptedItems);
     setStatusKey(accepted ? "merged" : "draftRejected");
     resolvePending(p, p.acceptedItems ? { acceptedCount: p.acceptedItems } : false);
+    finishAIDraftHandMode();
   }
-  function rejectPending() {
+  function rejectPending(options) {
+    options ||= {};
+    const restoreMode = options?.restoreMode !== false;
     if (!state.pending) return;
     blockCanvasInput();
     const p = state.pending;
@@ -1677,6 +1801,7 @@
     const accepted = Boolean(p.acceptedItems);
     setStatusKey(accepted ? "merged" : "draftRejected");
     resolvePending(p, p.items && p.acceptedItems ? { acceptedCount: p.acceptedItems } : false);
+    if (restoreMode) finishAIDraftHandMode();
   }
   function notePendingContinuedInput(drawing) {
     const p = state.pending;
@@ -1694,6 +1819,7 @@
     updateBatchActions();
     render();
     resolvePending(p, AI_CANCELLED);
+    finishAIDraftHandMode();
   }
   function resolvePending(p, result) {
     if (!p) return;
@@ -1756,6 +1882,7 @@
   }
   function startPending(image, x, y, revision, meta, command) {
     return new Promise((resolve) => {
+      enterAIDraftHandMode();
       const textCommand = command.tool === "write_text" ? { ...command } : null,
         animationScene = command.tool === "animate_scene" ? command : null,
         copyText = copyTextForCommand(command),
@@ -1812,6 +1939,7 @@
   }
   function startPendingBatch(items, revision, meta) {
     return new Promise((resolve) => {
+      enterAIDraftHandMode();
       if (state.pending) {
         appendPendingItems(state.pending, items, revision, meta, resolve);
         return;
@@ -1872,7 +2000,7 @@
     if (!gesture?.copy || gesture.id !== event.pointerId) return false;
     const shouldCopy = event.type !== "pointercancel" && gesture.armed && pendingCopyMatches(gesture, event);
     state.pendingGesture = null;
-    setCanvasCursor(state.mode === "hand" ? "grab" : "crosshair");
+    resetCanvasCursor();
     if (shouldCopy) void copyPendingText(gesture.itemIndex);
     return true;
   }
@@ -2504,34 +2632,6 @@
     requestInteractionLayerRender();
     return true;
   }
-  function cancelAnimationTouchHold(pointerId = null) {
-    const hold = state.animationTouchHold;
-    if (!hold || pointerId !== null && hold.id !== pointerId) return false;
-    clearTimeout(hold.timer);
-    state.animationTouchHold = null;
-    return true;
-  }
-  function beginAnimationTouchHold(event, point, result) {
-    cancelAnimationTouchHold();
-    const hold = {
-      id: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      point,
-      result,
-      timer: 0,
-    };
-    hold.timer = setTimeout(() => {
-      if (state.animationTouchHold !== hold) return;
-      state.animationTouchHold = null;
-      if (state.touches.size !== 1 || !state.touches.has(hold.id) || !state.animations.includes(result.animation)) return;
-      state.panGesture = null;
-      setNavigating(false);
-      beginAnimationGesture({ pointerId: hold.id }, hold.point, hold.result);
-    }, ANIMATION_TOUCH_HOLD_MS);
-    state.animationTouchHold = hold;
-    return true;
-  }
   function deselectAnimation() {
     if (!state.selectedAnimationId) return;
     acceptAnimationEdit();
@@ -2539,21 +2639,21 @@
   function isMousePan(e) {
     return e.pointerType === "mouse" && (e.button === 1 || e.altKey);
   }
-  function isAnimationActivationPointer(event) {
-    return (event.pointerType === "mouse" || event.pointerType === "pen") && event.button === 0;
-  }
   function finishDrawing(pointerType) {
     if (!state.drawing) return;
     const d = state.drawing;
     state.drawing = null;
     const shouldRequest = !d.erase;
+    let refineCandidate = null;
     if (shouldRequest) {
       for (const point of d.trail) state.hotspotTrail.push(point);
       if (state.hotspotTrail.length > 512) state.hotspotTrail.splice(0, state.hotspotTrail.length - 512);
+      refineCandidate = latchWidgetRefineCandidate(d);
     }
     notePendingContinuedInput(d);
     state.autoEligible ||= shouldRequest;
-    if (shouldRequest && state.autoEligible) schedule();
+    if (shouldRequest && state.autoEligible && !refineCandidate) schedule();
     save();
-    if (shouldRequest) setStatusKey(state.pending?.items ? "batchDraftReady" : state.pending ? "draftReady" : "ready");
+    requestInteractionLayerRender();
+    if (shouldRequest) setStatusKey(refineCandidate ? "widgetRefinePending" : state.pending?.items ? "batchDraftReady" : state.pending ? "draftReady" : "ready");
   }

@@ -102,6 +102,30 @@ function startApiServer(responseContent = '{"intent":"none","commands":[]}', opt
   });
 }
 
+function startTruncatedApiServer() {
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    const chunks = [];
+    req.on("data", chunk => chunks.push(chunk));
+    req.on("end", () => {
+      requests.push(Buffer.concat(chunks).toString("utf8"));
+      const completeBody=JSON.stringify({id:"truncated-response",choices:[{message:{content:'{"intent":"answer","commands":[]}'}}]}),
+        partialBody=completeBody.slice(0,Math.max(1,Math.floor(completeBody.length/2)));
+      res.writeHead(200,{
+        "Content-Type":"application/json",
+        "Content-Length":String(Buffer.byteLength(completeBody)+100),
+        "x-request-id":"truncated-upstream-request",
+      });
+      res.write(partialBody);
+      setTimeout(()=>res.destroy(),20);
+    });
+  });
+  return new Promise((resolve,reject)=>{
+    server.once("error",reject);
+    server.listen(0,"127.0.0.1",()=>resolve({server,requests,origin:`http://127.0.0.1:${server.address().port}`}));
+  });
+}
+
 function startServer(env) {
   const child = spawn(process.execPath, [path.join(ROOT, "server.js")], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   return new Promise((resolve, reject) => {
@@ -180,6 +204,23 @@ function validPayload() {
   };
 }
 
+function validSharedCanvas(id = `${Date.now()}-123e4567-e89b-12d3-a456-426614174000`, overrides = {}) {
+  return {
+    version:1,
+    id,
+    createdAt:Date.now(),
+    name:"Shared design",
+    theme:"studio",
+    view:{scale:0.5,panX:120,panY:240},
+    animations:[],
+    widgets:[],
+    images:[],
+    tiles:[{k:"0,0",data:PNG}],
+    preview:PNG,
+    ...overrides,
+  };
+}
+
 function weatherPluginDescriptor() {
   return {
     id:"weather",
@@ -187,18 +228,24 @@ function weatherPluginDescriptor() {
     version:"1",
     connect:["https://geocoding-api.open-meteo.com", "https://api.open-meteo.com"],
     recommendedRefreshSeconds:900,
-    document:fs.readFileSync(path.join(ROOT, "public", "plugins", "weather.md"), "utf8").trim(),
+    document:fs.readFileSync(path.join(ROOT, "public", "plugins", "weather", "plugin.md"), "utf8").trim(),
+    styles:"",
   };
 }
 
 function builtInPluginDescriptor(id, connect = []) {
+  const bundleDirectory = path.join(ROOT, "public", "plugins", id),
+    bundled = fs.existsSync(path.join(bundleDirectory, "plugin.md")),
+    documentPath = bundled ? path.join(bundleDirectory, "plugin.md") : path.join(ROOT, "public", "plugins", `${id}.md`),
+    stylesPath = path.join(bundleDirectory, "styles.css");
   return {
     id,
     name:id,
     version:"1",
     connect,
     recommendedRefreshSeconds:86400,
-    document:fs.readFileSync(path.join(ROOT, "public", "plugins", `${id}.md`), "utf8").trim(),
+    document:fs.readFileSync(documentPath, "utf8").trim(),
+    ...(bundled && fs.existsSync(stylesPath) ? { styles:fs.readFileSync(stylesPath, "utf8").trim() } : {}),
   };
 }
 
@@ -482,12 +529,17 @@ test("page reasoning effort maps to OpenAI and Anthropic request fields", { time
     assert.equal(request.max_tokens,16384);
     assert.match(request.system,/Treat the canvas as an existing document to extend/);
     assert.match(request.system,/place only `5` immediately after the equals sign/);
-    assert.match(request.system,/within approximately 4096 tokens/);
+    assert.match(request.system,/within approximately 6144 tokens/);
     assert.match(request.system,/no more than roughly 7000 tokens/);
     assert.match(request.system,/Reserve sufficient output budget for one complete valid JSON response/);
-    const schemaStart=request.system.lastIndexOf('{"$schema":"https://json-schema.org/draft/2020-12/schema"');
-    assert.ok(schemaStart > request.system.indexOf("Reserve sufficient output budget"));
-    assert.doesNotThrow(() => JSON.parse(request.system.slice(schemaStart)));
+    const fallbackStart=request.system.indexOf("Mandatory final visible-response fallback"),
+      schemaStart=request.system.lastIndexOf('{"$schema":"https://json-schema.org/draft/2020-12/schema"');
+    assert.ok(fallbackStart > request.system.indexOf("Reserve sufficient output budget"));
+    assert.match(request.system.slice(fallbackStart,schemaStart),/their absence is not evidence that there is no new input/);
+    assert.match(request.system.slice(fallbackStart,schemaStart),/entire attached input image within sourceRect/);
+    assert.ok(schemaStart > fallbackStart);
+    const responseSchema=JSON.parse(request.system.slice(schemaStart));
+    assert.equal(responseSchema.properties.commands.minItems,1);
   } finally { await stopServer(anthropicServer.child); await new Promise(resolve=>anthropic.server.close(resolve)); }
 
   const disabled=await startApiServer(undefined,{format:"anthropic"}),disabledServer=await startServer(apiServerEnv(disabled.origin,{AI_API_FORMAT:"anthropic",AI_API_URL:disabled.origin,AI_EFFORT:"max"}));
@@ -499,7 +551,7 @@ test("page reasoning effort maps to OpenAI and Anthropic request fields", { time
     assert.deepEqual(request.thinking,{type:"disabled"});
     assert.equal(request.output_config,undefined);
     assert.equal(Object.hasOwn(request,"temperature"),false);
-    assert.equal(request.max_tokens,8192);
+    assert.equal(request.max_tokens,12288);
     assert.doesNotMatch(request.system,/no more than roughly 7000 tokens/);
   } finally { await stopServer(disabledServer.child); await new Promise(resolve=>disabled.server.close(resolve)); }
 });
@@ -563,7 +615,7 @@ test("Anthropic output exhaustion reports the real response limit instead of a J
   try {
     const response=await fetch(`${running.origin}/api/ai/command`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(validPayload())}),body=await response.json();
     assert.equal(response.status,502);
-    assert.match(body.error,/8192-token response allowance/);
+    assert.match(body.error,/12288-token response allowance/);
     assert.doesNotMatch(body.error,/Unexpected end of JSON input/);
   } finally { await stopServer(running.child); await new Promise(resolve=>upstream.server.close(resolve)); }
 });
@@ -669,9 +721,154 @@ test("PIN authentication leaves the API provider request behavior unchanged", { 
   }
 });
 
+test("shared PenEcho server canvases support authorized metadata-first CRUD", { timeout:20000 }, async () => {
+  const stateDir=testStateDir({}),
+    {child,origin}=await startServer(serverEnv({PENECHO_STATE_DIR:stateDir})),
+    snapshot=validSharedCanvas(),
+    mutationHeaders={"Content-Type":"application/json",Origin:origin};
+  try {
+    const created=await fetch(`${origin}/api/canvases`,{method:"POST",headers:mutationHeaders,body:JSON.stringify(snapshot)}),
+      createdBody=await created.json();
+    assert.equal(created.status,201,JSON.stringify(createdBody));
+    assert.equal(createdBody.canvas.id,snapshot.id);
+    assert.equal(createdBody.canvas.tileCount,1);
+    assert.equal(Object.hasOwn(createdBody.canvas,"tiles"),false);
+    assert.equal(Object.hasOwn(createdBody.canvas,"widgets"),false);
+
+    const listed=await fetch(`${origin}/api/canvases`),
+      listedBody=await listed.json();
+    assert.equal(listed.status,200);
+    assert.equal(listedBody.canvases.length,1);
+    assert.equal(listedBody.canvases[0].id,snapshot.id);
+    assert.equal(listedBody.canvases[0].preview,PNG);
+    assert.equal(Object.hasOwn(listedBody.canvases[0],"tiles"),false);
+
+    const loaded=await fetch(`${origin}/api/canvases/${encodeURIComponent(snapshot.id)}`),
+      loadedBody=await loaded.json();
+    assert.equal(loaded.status,200);
+    assert.deepEqual(loadedBody.canvas.tiles,snapshot.tiles);
+    assert.deepEqual(loadedBody.canvas.widgets,[]);
+
+    const changed={...snapshot,name:"Updated shared design",createdAt:Date.now()};
+    const updated=await fetch(`${origin}/api/canvases/${encodeURIComponent(snapshot.id)}`,{method:"PUT",headers:mutationHeaders,body:JSON.stringify(changed)}),
+      updatedBody=await updated.json();
+    assert.equal(updated.status,200,JSON.stringify(updatedBody));
+    assert.equal(updatedBody.canvas.name,"Updated shared design");
+
+    const invalidId=await fetch(`${origin}/api/canvases/../../package.json`);
+    assert.equal(invalidId.status,404);
+    const invalidSnapshot=await fetch(`${origin}/api/canvases`,{method:"POST",headers:mutationHeaders,body:JSON.stringify({...validSharedCanvas(),preview:"data:text/plain;base64,SGk="})});
+    assert.equal(invalidSnapshot.status,400);
+
+    const removed=await fetch(`${origin}/api/canvases/${encodeURIComponent(snapshot.id)}`,{method:"DELETE",headers:{Origin:origin}});
+    assert.equal(removed.status,200,await removed.text());
+    assert.equal((await fetch(`${origin}/api/canvases`)).status,200);
+    assert.deepEqual(await fetch(`${origin}/api/canvases`).then(response=>response.json()),{canvases:[]});
+  } finally {
+    await stopServer(child);
+  }
+});
+
+test("shared PenEcho server canvases retain up to one hundred widgets, images, and animations", { timeout:20000 }, async () => {
+  const stateDir=testStateDir({}),
+    {child,origin}=await startServer(serverEnv({PENECHO_STATE_DIR:stateDir})),
+    mutationHeaders={"Content-Type":"application/json",Origin:origin},
+    widgets=Array.from({length:100},(_,index)=>({id:`widget-${index + 1}`})),
+    animations=Array.from({length:100},(_,index)=>({id:`animation-${index + 1}`})),
+    images=Array.from({length:100},(_,index)=>({
+      id:`image-${index + 1}`,
+      x:0,
+      y:0,
+      w:80,
+      h:80,
+      naturalW:1,
+      naturalH:1,
+      sourceName:"",
+      data:PNG,
+    }));
+  try {
+    const widgetsAccepted=await fetch(`${origin}/api/canvases`,{
+        method:"POST",
+        headers:mutationHeaders,
+        body:JSON.stringify(validSharedCanvas(`${Date.now()}-123e4567-e89b-12d3-a456-426614174100`,{widgets})),
+      }),
+      widgetsAcceptedBody=await widgetsAccepted.json();
+    assert.equal(widgetsAccepted.status,201,JSON.stringify(widgetsAcceptedBody));
+    assert.equal(widgetsAcceptedBody.canvas.widgetCount,100);
+
+    const widgetsRejected=await fetch(`${origin}/api/canvases`,{
+      method:"POST",
+      headers:mutationHeaders,
+      body:JSON.stringify(validSharedCanvas(`${Date.now() + 1}-123e4567-e89b-12d3-a456-426614174101`,{widgets:[...widgets,{id:"widget-101"}]})),
+    });
+    assert.equal(widgetsRejected.status,400,await widgetsRejected.text());
+
+    const imagesAccepted=await fetch(`${origin}/api/canvases`,{
+        method:"POST",
+        headers:mutationHeaders,
+        body:JSON.stringify(validSharedCanvas(`${Date.now() + 2}-123e4567-e89b-12d3-a456-426614174102`,{images})),
+      }),
+      imagesAcceptedBody=await imagesAccepted.json();
+    assert.equal(imagesAccepted.status,201,JSON.stringify(imagesAcceptedBody));
+    assert.equal(imagesAcceptedBody.canvas.imageCount,100);
+
+    const imagesRejected=await fetch(`${origin}/api/canvases`,{
+      method:"POST",
+      headers:mutationHeaders,
+      body:JSON.stringify(validSharedCanvas(`${Date.now() + 3}-123e4567-e89b-12d3-a456-426614174103`,{images:[...images,{...images[0],id:"image-101"}]})),
+    });
+    assert.equal(imagesRejected.status,400,await imagesRejected.text());
+
+    const animationsAccepted=await fetch(`${origin}/api/canvases`,{
+        method:"POST",
+        headers:mutationHeaders,
+        body:JSON.stringify(validSharedCanvas(`${Date.now() + 4}-123e4567-e89b-12d3-a456-426614174104`,{animations})),
+      }),
+      animationsAcceptedBody=await animationsAccepted.json();
+    assert.equal(animationsAccepted.status,201,JSON.stringify(animationsAcceptedBody));
+    assert.equal(animationsAcceptedBody.canvas.animationCount,100);
+
+    const animationsRejected=await fetch(`${origin}/api/canvases`,{
+      method:"POST",
+      headers:mutationHeaders,
+      body:JSON.stringify(validSharedCanvas(`${Date.now() + 5}-123e4567-e89b-12d3-a456-426614174105`,{animations:[...animations,{id:"animation-101"}]})),
+    });
+    assert.equal(animationsRejected.status,400,await animationsRejected.text());
+  } finally {
+    await stopServer(child);
+  }
+});
+
+test("shared server canvases obey the process-lifetime PenEcho PIN session", { timeout:20000 }, async () => {
+  const {child,origin}=await startServer(serverEnv({PENECHO_TEST_OPEN_ACCESS:"0"})),
+    snapshot=validSharedCanvas();
+  try {
+    assert.equal((await fetch(`${origin}/api/canvases`)).status,403);
+    const setup=await fetch(`${origin}/api/local-access/setup-pin`,{
+        method:"POST",
+        headers:{"Content-Type":"application/json",Origin:origin},
+        body:JSON.stringify({pin:"271828",confirmation:"271828"}),
+      }),
+      setupBody=await setup.json(),
+      sessionHeaders={"X-PenEcho-Session":setupBody.accessSessionToken},
+      mutationHeaders={...sessionHeaders,"Content-Type":"application/json",Origin:origin};
+    assert.equal(setup.status,200,JSON.stringify(setupBody));
+    const created=await fetch(`${origin}/api/canvases`,{method:"POST",headers:mutationHeaders,body:JSON.stringify(snapshot)});
+    assert.equal(created.status,201,await created.text());
+    assert.equal((await fetch(`${origin}/api/canvases`,{headers:sessionHeaders})).status,200);
+    assert.equal((await fetch(`${origin}/api/canvases/${encodeURIComponent(snapshot.id)}`,{headers:sessionHeaders})).status,200);
+    assert.equal((await fetch(`${origin}/api/canvases/${encodeURIComponent(snapshot.id)}`)).status,403);
+  } finally {
+    await stopServer(child);
+  }
+});
+
 test("enabled plugin documents reach the model and gate html_widget commands", { timeout:20000 }, async () => {
   const command = (pluginId="weather", html="<!doctype html><title>Weather</title>", placement = {}) => JSON.stringify({ intent:"answer", commands:[{ tool:"html_widget", pluginId, x:100, y:200, w:1200, h:700, title:"Weather", refreshSeconds:900, html, ...placement }] }),
-    upstream = await startApiServer("", { response:({index}) => ({ body:index === 2 ? command("stocks") : index === 3 ? command("weather", "x".repeat(40001)) : index === 4 ? command("weather", undefined, { x:17900, y:19300, w:2400, h:1150 }) : index === 5 ? command("image-search", undefined, { copyText:"aurora", copyLabel:"Copy query" }) : index === 6 ? command("flowchart", undefined, { copyText:"flowchart TD\nA-->B", copyLabel:"Copy Mermaid" }) : command() }) }),
+    upstream = await startApiServer("", { response:({index}) => {
+      const professional = placement => command("flowchart", undefined, { sourceFormat:"mermaid", copyText:"flowchart LR\nA --> B", ...placement });
+      return { body:index === 0 ? command("weather", "x".repeat(200000)) : index === 2 ? command("stocks") : index === 3 ? command("weather", "x".repeat(200001)) : index === 4 ? command("weather", undefined, { x:17900, y:19300, w:2400, h:1150 }) : index === 5 ? command("image-search", undefined, { copyText:"aurora", copyLabel:"Copy query" }) : index === 6 ? command("flowchart", undefined, { diagramKind:"process", sourceFormat:"bpmn-xml", frameworkVersion:"penecho-professional-diagrams-v1", copyText:'<?xml version="1.0"?><definitions />' }) : index === 7 ? professional({ w:7800, h:2100 }) : index === 8 ? professional({ w:10000, h:20000 }) : index === 9 ? professional({ w:8000, h:6000 }) : command() };
+    } }),
     {child,origin} = await startServer(apiServerEnv(upstream.origin));
   try {
     const descriptor = weatherPluginDescriptor(), enabled = validPayload();
@@ -681,12 +878,23 @@ test("enabled plugin documents reach the model and gate html_widget commands", {
     assert.equal(acceptedResponse.status, 200);
     assert.equal(accepted.commands.length, 1);
     assert.equal(accepted.commands[0].tool, "html_widget");
+    assert.equal(accepted.commands[0].html.length, 200000);
     const outbound = JSON.parse(upstream.requests[0]),
       modelInput = JSON.parse(outbound.messages[1].content.find(part => part.type === "text").text);
-    assert.deepEqual(modelInput.enabledPlugins, [descriptor]);
-    assert.match(modelInput.widgetRenderingPolicy, /most important information/);
-    assert.match(modelInput.widgetRenderingPolicy, /180-240px/);
-    assert.match(modelInput.widgetRenderingPolicy, /remove secondary detail instead of shrinking text/);
+    const { styles:ignoredStyles, ...modelDescriptor } = descriptor;
+    assert.deepEqual(modelInput.enabledPlugins, [modelDescriptor]);
+    assert.equal("styles" in modelInput.enabledPlugins[0], false);
+    assert.equal(Object.keys(modelInput).at(-1), "widgetGeometry");
+    assert.deepEqual(modelInput.widgetGeometry.viewportBucket, { w:1000, h:1000, rounding:"ceil-to-1000-before-halving" });
+    assert.deepEqual(modelInput.widgetGeometry.max, { w:500, h:500 });
+    assert.match(modelInput.widgetRenderingPolicy, /Layout and typography must be designed together/);
+    assert.match(modelInput.widgetRenderingPolicy, /clamp\(\) with container- or viewport-relative units/);
+    assert.match(modelInput.widgetRenderingPolicy, /prominent without crowding[\s\S]*comfortably readable/);
+    assert.match(modelInput.widgetRenderingPolicy, /Do not fix overflow by making text excessively small[\s\S]*do not use oversized text/);
+    assert.match(modelInput.widgetRenderingPolicy, /reflowing, regrouping, shortening secondary copy, or choosing a more appropriate widget size/);
+    assert.match(modelInput.widgetRenderingPolicy, /verify the longest labels and every section at the actual widget dimensions/);
+    assert.match(modelInput.widgetRenderingPolicy, /For SVG, size text relative to its viewBox, not browser defaults/);
+    assert.doesNotMatch(modelInput.widgetRenderingPolicy, /180-240px|at least 100px|at least 80px/);
     assert.match(modelInput.widgetRenderingPolicy, /transparent[\s\S]*no outer background, border, corner radius, or box shadow/);
 
     const disabledResponse = await fetch(`${origin}/api/ai/command`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(validPayload()) }),
@@ -704,7 +912,7 @@ test("enabled plugin documents reach the model and gate html_widget commands", {
     const edgeResponse = await fetch(`${origin}/api/ai/command`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(enabled) }),
       edge = await edgeResponse.json();
     assert.equal(edgeResponse.status, 200);
-    assert.deepEqual({ x:edge.commands[0].x, y:edge.commands[0].y, w:edge.commands[0].w, h:edge.commands[0].h }, { x:17900, y:19300, w:2100, h:700 });
+    assert.deepEqual({ x:edge.commands[0].x, y:edge.commands[0].y, w:edge.commands[0].w, h:edge.commands[0].h }, { x:17600, y:18850, w:2400, h:1150 });
 
     const imagePayload = validPayload();
     imagePayload.plugins = [builtInPluginDescriptor("image-search", ["https://commons.wikimedia.org", "https://upload.wikimedia.org", "https://api.openverse.org"])];
@@ -716,30 +924,349 @@ test("enabled plugin documents reach the model and gate html_widget commands", {
     assert.equal("copyLabel" in imageBody.commands[0], false);
 
     const flowchartPayload = validPayload();
+    flowchartPayload.visibleRect = { x:0, y:0, w:10000, h:10000 };
     flowchartPayload.plugins = [builtInPluginDescriptor("flowchart")];
     const flowchartResponse = await fetch(`${origin}/api/ai/command`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(flowchartPayload) }),
       flowchartBody = await flowchartResponse.json();
     assert.equal(flowchartResponse.status, 200);
     assert.equal(flowchartBody.commands[0].pluginId, "flowchart");
-    assert.equal(flowchartBody.commands[0].copyText, "flowchart TD\nA-->B");
-    assert.equal(flowchartBody.commands[0].copyLabel, "Copy Mermaid");
+    assert.equal(flowchartBody.commands[0].sourceFormat, "bpmn-xml");
+    assert.equal(flowchartBody.commands[0].copyText, '<?xml version="1.0"?><definitions />');
+    assert.equal(flowchartBody.commands[0].copyLabel, "Copy bpmn-xml");
+
+    const wideFlowchartResponse = await fetch(`${origin}/api/ai/command`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(flowchartPayload) }),
+      wideFlowchart = await wideFlowchartResponse.json(),
+      wideOutbound = JSON.parse(upstream.requests[7]),
+      wideModelInput = JSON.parse(wideOutbound.messages[1].content.find(part => part.type === "text").text);
+    assert.equal(wideFlowchartResponse.status, 200);
+    assert.deepEqual({ w:wideFlowchart.commands[0].w, h:wideFlowchart.commands[0].h }, { w:7800, h:2100 });
+    assert.deepEqual(wideModelInput.widgetGeometry.max, { w:5000, h:5000 });
+    assert.equal(wideOutbound.messages[0].content, outbound.messages[0].content);
+    assert.match(wideOutbound.messages[0].content, /Follow the request-specific min and max dimensions in modelInput\.widgetGeometry/);
+    assert.match(wideOutbound.messages[0].content, /bounds are not size targets[\s\S]*?do not make a widget large[\s\S]*?do not minimize it/);
+    assert.match(wideOutbound.messages[0].content, /semantic source[\s\S]*?appropriate browser library loaded on demand inside that widget/);
+    assert.match(wideOutbound.messages[0].content, /following any matching plugin renderer contract first/);
+    assert.match(wideOutbound.messages[0].content, /mature, fixed, documented browser entries[\s\S]*?never use latest tags[\s\S]*?guess internal \/lib or \/dist paths[\s\S]*?invent library APIs/);
+    assert.match(wideOutbound.messages[0].content, /never clear a successful render because a non-rendering follow-up fails/);
+
+    const oversizedFlowchartResponse = await fetch(`${origin}/api/ai/command`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(flowchartPayload) }),
+      oversizedFlowchart = await oversizedFlowchartResponse.json();
+    assert.equal(oversizedFlowchartResponse.status, 200);
+    assert.deepEqual({ w:oversizedFlowchart.commands[0].w, h:oversizedFlowchart.commands[0].h }, { w:2500, h:5000 });
+
+    const areaPayload = { ...flowchartPayload, visibleRect:{ x:0, y:0, w:20000, h:20000 } },
+      areaResponse = await fetch(`${origin}/api/ai/command`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(areaPayload) }),
+      areaBody = await areaResponse.json();
+    assert.equal(areaResponse.status, 200);
+    assert.deepEqual({ w:areaBody.commands[0].w, h:areaBody.commands[0].h }, { w:7302, h:5477 });
+    assert.ok(areaBody.commands[0].w * areaBody.commands[0].h <= 40000000);
 
     const malformed = validPayload();
     malformed.plugins = [{ ...descriptor, connect:["https://*.open-meteo.com"] }];
     const rejected = await fetch(`${origin}/api/ai/command`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(malformed) });
     assert.equal(rejected.status, 400);
     const oversized = validPayload();
-    oversized.plugins = [{ ...descriptor, document:"x".repeat(3001) }];
+    oversized.plugins = [{ ...descriptor, document:"x".repeat(12001) }];
     const oversizedResponse = await fetch(`${origin}/api/ai/command`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(oversized) });
     assert.equal(oversizedResponse.status, 400);
-    assert.equal(upstream.requests.length, 7);
+    assert.equal(upstream.requests.length, 10);
   } finally {
     await stopServer(child);
     await new Promise(resolve => upstream.server.close(resolve));
   }
 });
 
-test("widget host CSP contains only exact declared HTTPS origins", { timeout:10000 }, async () => {
+test("html_widget commands fill required fields and discard invalid optional metadata", { timeout:20000 }, async () => {
+  const response = index => JSON.stringify({
+      intent:"answer",
+      commands:[{
+        tool:"html_widget",
+        pluginId:"general",
+        ...(index ? { x:30000, y:-500, w:2, h:3, title:"T".repeat(140), refreshSeconds:30 } : {
+          diagramKind:"D".repeat(100),
+          sourceFormat:"S".repeat(100),
+          frameworkVersion:"F".repeat(140),
+          copyText:"C".repeat(16001),
+          copyLabel:"L".repeat(100),
+        }),
+        html:"<!doctype html><title>Store Points Map</title>",
+      }],
+    }),
+    upstream = await startApiServer("", { response:({index}) => ({ body:response(index) }) }),
+    running = await startServer(apiServerEnv(upstream.origin)),
+    plugin = {
+      ...builtInPluginDescriptor("general"),
+      name:"General HTML",
+      recommendedRefreshSeconds:60,
+    },
+    payload = validPayload();
+  payload.visibleRect = { x:0, y:0, w:10000, h:10000 };
+  payload.plugins = [plugin];
+  try {
+    const resultResponse = await fetch(`${running.origin}/api/ai/command`, {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify(payload),
+      }),
+      result = await resultResponse.json();
+    assert.equal(resultResponse.status, 200);
+    assert.equal(result.commands.length, 1);
+    assert.deepEqual(
+      {
+        tool:result.commands[0].tool,
+        pluginId:result.commands[0].pluginId,
+        x:result.commands[0].x,
+        y:result.commands[0].y,
+        w:result.commands[0].w,
+        h:result.commands[0].h,
+        title:result.commands[0].title,
+        refreshSeconds:result.commands[0].refreshSeconds,
+      },
+      {
+        tool:"html_widget",
+        pluginId:"general",
+        x:0,
+        y:61,
+        w:2400,
+        h:1400,
+        title:"General HTML",
+        refreshSeconds:0,
+      },
+    );
+    assert.equal(result.commands[0].diagramKind, "D".repeat(80));
+    for (const field of ["sourceFormat", "frameworkVersion", "copyText", "copyLabel"])
+      assert.equal(field in result.commands[0], false, field);
+
+    const clampedResponse = await fetch(`${running.origin}/api/ai/command`, {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify(payload),
+      }),
+      clamped = await clampedResponse.json();
+    assert.equal(clampedResponse.status,200);
+    assert.deepEqual(
+      {
+        x:clamped.commands[0].x,
+        y:clamped.commands[0].y,
+        w:clamped.commands[0].w,
+        h:clamped.commands[0].h,
+        title:clamped.commands[0].title,
+        refreshSeconds:clamped.commands[0].refreshSeconds,
+      },
+      {
+        x:19700,
+        y:0,
+        w:300,
+        h:450,
+        title:"T".repeat(120),
+        refreshSeconds:60,
+      },
+    );
+  } finally {
+    await stopServer(running.child);
+    await new Promise(resolve => upstream.server.close(resolve));
+  }
+});
+
+test("professional diagrams accept local source renderers and keep unknown formats on html_widget", { timeout:20000 }, async () => {
+  const diagram = (sourceFormat, source = "flowchart LR\nA --> B") => ({
+      tool:"diagram_source",
+      pluginId:"flowchart",
+      x:120,
+      y:240,
+      w:1200,
+      h:700,
+      title:"Professional diagram",
+      diagramKind:"process",
+      sourceFormat,
+      source,
+    }),
+    response = command => JSON.stringify({ intent:"answer", commands:[command] }),
+    upstream = await startApiServer("", {
+      response:({index}) => ({
+        body:[
+          response(diagram("mermaid")),
+          response(diagram("Graphviz DOT", "digraph G { A -> B }")),
+          response(diagram("plantuml", "@startuml\nA -> B\n@enduml")),
+          response(diagram("mermaid", "flowchart LR\nA --> B --> C")),
+          response(diagram("dot", "digraph G { A -> B -> C }")),
+          response(diagram("dot", "digraph G { A -> B -> C }")),
+          response(diagram("mermaid", `%% ${"x".repeat(90 * 1024)}`)),
+        ][index],
+      }),
+    }),
+    running = await startServer(apiServerEnv(upstream.origin)),
+    payload = validPayload();
+  payload.plugins = [builtInPluginDescriptor("flowchart")];
+  try {
+    const first = await fetch(`${running.origin}/api/ai/command`, {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body:JSON.stringify(payload),
+    }).then(value => value.json());
+    assert.deepEqual(first.commands[0], {
+      tool:"diagram_source",
+      pluginId:"flowchart",
+      x:120,
+      y:240,
+      w:1200,
+      h:700,
+      title:"Professional diagram",
+      refreshSeconds:0,
+      sourceFormat:"mermaid",
+      source:"flowchart LR\nA --> B",
+      diagramKind:"process",
+    });
+
+    const graphviz = await fetch(`${running.origin}/api/ai/command`, {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body:JSON.stringify(payload),
+    }).then(value => value.json());
+    assert.equal(graphviz.commands[0].sourceFormat, "dot");
+
+    const unsupported = await fetch(`${running.origin}/api/ai/command`, {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body:JSON.stringify(payload),
+    }).then(value => value.json());
+    assert.deepEqual(unsupported.commands, []);
+
+    const refinePayload = {
+      ...payload,
+      trigger:"manual",
+      userAction:"answer",
+      widgetEdit:{
+        mode:"replace",
+        widgetType:"diagram_source",
+        pluginId:"flowchart",
+        title:"Professional diagram",
+        instructionMode:"implicit-polish",
+        box:{ x:120, y:240, w:1200, h:700 },
+        diagramKind:"process",
+        sourceFormat:"mermaid",
+        source:"flowchart LR\nA --> B",
+      },
+    };
+    const refined = await fetch(`${running.origin}/api/ai/command`, {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body:JSON.stringify(refinePayload),
+    }).then(value => value.json());
+    assert.equal(refined.commands[0].tool, "diagram_source");
+    assert.equal(refined.commands[0].sourceFormat, "mermaid");
+    assert.equal(refined.commands[0].source, "flowchart LR\nA --> B --> C");
+
+    const changedFormat = await fetch(`${running.origin}/api/ai/command`, {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body:JSON.stringify(refinePayload),
+    }).then(value => value.json());
+    assert.deepEqual(changedFormat.commands, []);
+
+    const largeSource = await fetch(`${running.origin}/api/ai/command`, {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body:JSON.stringify(payload),
+    }).then(value => value.json());
+    assert.equal(largeSource.commands.length,1);
+    assert.ok(Buffer.byteLength(largeSource.commands[0].source,"utf8") > 20 * 1024);
+    assert.ok(Buffer.byteLength(largeSource.commands[0].source,"utf8") <= 100 * 1024);
+
+    const outbound = JSON.parse(upstream.requests[3]),
+      modelInput = JSON.parse(outbound.messages[1].content.find(part => part.type === "text").text);
+    assert.equal(modelInput.widgetEdit.widgetType, "diagram_source");
+    assert.equal(modelInput.widgetEdit.source, refinePayload.widgetEdit.source);
+    assert.equal("html" in modelInput.widgetEdit, false);
+    assert.match(modelInput.widgetEditPolicy, /same pluginId and sourceFormat[\s\S]*?never HTML/);
+  } finally {
+    await stopServer(running.child);
+    await new Promise(resolve => upstream.server.close(resolve));
+  }
+});
+
+test("custom plugin widget refinement preserves its bundle and rejects ambiguous replacements", { timeout:20000 }, async () => {
+  const replacement = {
+      tool:"html_widget",
+      html:"<!doctype html><main class=\"custom-node\">Updated</main>",
+      diagramKind:"architecture",
+      copyText:"client -> api -> database",
+    },
+    response = commands => JSON.stringify({ intent:"answer", commands }),
+    upstream = await startApiServer("", { response:({index}) => ({ body:index === 0 ? response([replacement]) : response([replacement, { ...replacement, title:"Ambiguous second widget" }]) }) }),
+    running = await startServer(apiServerEnv(upstream.origin)),
+    plugin = {
+      id:"custom-diagram",
+      name:"Custom Diagram",
+      version:"1",
+      connect:[],
+      recommendedRefreshSeconds:86400,
+      document:"---\npenecho-plugin: 1\nid: custom-diagram\nname: Custom Diagram\nversion: 1\n---\n# Custom Diagram\n\n## One-shot example\nReturn one html_widget.",
+      styles:".custom-node { color: #123456; }",
+    },
+    payload = validPayload();
+  payload.trigger = "manual";
+  payload.userAction = "answer";
+  payload.plugins = [plugin];
+  payload.widgetEdit = {
+    mode:"replace",
+    pluginId:plugin.id,
+    title:"Existing custom architecture",
+    instructionMode:"implicit-polish",
+    box:{ x:120, y:240, w:1200, h:700 },
+    html:"<!doctype html><main class=\"custom-node\">Existing</main>",
+    sourceFormat:"d2",
+    source:"client -> api -> database",
+    targetId:"client-only-widget-id",
+  };
+  try {
+    const acceptedResponse = await fetch(`${running.origin}/api/ai/command`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload) }),
+      accepted = await acceptedResponse.json();
+    assert.equal(acceptedResponse.status, 200);
+    assert.equal(accepted.commands.length, 1);
+    assert.equal(accepted.commands[0].pluginId, plugin.id);
+    assert.deepEqual(
+      {
+        x:accepted.commands[0].x,
+        y:accepted.commands[0].y,
+        w:accepted.commands[0].w,
+        h:accepted.commands[0].h,
+        title:accepted.commands[0].title,
+        refreshSeconds:accepted.commands[0].refreshSeconds,
+      },
+      {
+        x:payload.widgetEdit.box.x,
+        y:payload.widgetEdit.box.y,
+        w:payload.widgetEdit.box.w,
+        h:payload.widgetEdit.box.h,
+        title:payload.widgetEdit.title,
+        refreshSeconds:0,
+      },
+    );
+    assert.equal(accepted.commands[0].sourceFormat, "d2");
+    assert.equal(accepted.commands[0].copyLabel, "Copy d2");
+
+    const outbound = JSON.parse(upstream.requests[0]),
+      modelInput = JSON.parse(outbound.messages[1].content.find(part => part.type === "text").text);
+    assert.equal(modelInput.enabledPlugins[0].document, plugin.document);
+    assert.equal("styles" in modelInput.enabledPlugins[0], false);
+    assert.equal(modelInput.widgetEdit.pluginId, plugin.id);
+    assert.equal(modelInput.widgetEdit.html, payload.widgetEdit.html);
+    assert.equal("targetId" in modelInput.widgetEdit, false);
+    assert.match(modelInput.widgetEditPolicy, /one-shot replacement of exactly the supplied html_widget target/);
+
+    const ambiguousResponse = await fetch(`${running.origin}/api/ai/command`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload) }),
+      ambiguous = await ambiguousResponse.json();
+    assert.equal(ambiguousResponse.status, 200);
+    assert.deepEqual(ambiguous.commands, []);
+    assert.equal(upstream.requests.length, 3);
+  } finally {
+    await stopServer(running.child);
+    await new Promise(resolve => upstream.server.close(resolve));
+  }
+});
+
+test("widget host CSP permits on-demand HTTPS resources inside the isolated widget", { timeout:10000 }, async () => {
   const {child,origin} = await startServer(serverEnv());
   try {
     const query = new URLSearchParams();
@@ -747,12 +1274,13 @@ test("widget host CSP contains only exact declared HTTPS origins", { timeout:100
     query.append("connect", "https://api.open-meteo.com");
     const response = await fetch(`${origin}/widget-host.html?${query}`), policy = response.headers.get("content-security-policy");
     assert.equal(response.status, 200);
-    assert.match(policy, /connect-src https:\/\/geocoding-api\.open-meteo\.com https:\/\/api\.open-meteo\.com;/);
-    assert.match(policy, /img-src data: blob: https:\/\/geocoding-api\.open-meteo\.com https:\/\/api\.open-meteo\.com;/);
+    assert.match(policy, /script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' https:/);
+    assert.match(policy, /style-src 'unsafe-inline' https:/);
+    assert.match(policy, /connect-src https:/);
+    assert.match(policy, /img-src data: blob: https:/);
     assert.match(policy, /frame-ancestors 'self'/);
-    assert.doesNotMatch(policy, /connect-src[^;]*\*/);
     const offlinePolicy = (await fetch(`${origin}/widget-host.html`)).headers.get("content-security-policy");
-    assert.match(offlinePolicy, /connect-src 'none';/);
+    assert.match(offlinePolicy, /connect-src https:/);
     const renderer = await fetch(`${origin}/widget-renderer.js`);
     assert.equal(renderer.status, 200);
     assert.match(renderer.headers.get("content-type"), /^application\/javascript/);
@@ -779,18 +1307,32 @@ test("local plugin discovery is constrained and widget prompting is conditional"
   const source = fs.readFileSync(path.join(ROOT, "src", "server", "main.js"), "utf8"),
     basePrompt = /const SYSTEM_PROMPT = `([\s\S]*?)`;\s*\n\s*const ACTIVE_SYSTEM_PROMPT_BASE/.exec(source)?.[1] || "";
   assert.doesNotMatch(basePrompt, /html_widget|enabledPlugins/);
-  assert.match(source, /const PLUGIN_SYSTEM_PROMPT = `Enabled plugin documents/);
-  assert.match(source, /if \(pluginsEnabled\) sections\.push\(PLUGIN_SYSTEM_PROMPT\)/);
+  assert.match(basePrompt, /If the newest input is non-empty but unclear, incomplete, or lacks enough context, return one short write_text clarification question stating what is missing\./);
+  assert.match(basePrompt, /Use intent none with an empty commands array only when there is genuinely no new input\./);
+  assert.doesNotMatch(basePrompt, /If genuinely unreadable or incomplete, use intent none/);
+  assert.match(source, /const MANDATORY_VISIBLE_RESPONSE_PROMPT = `Mandatory final visible-response fallback/);
+  assert.match(source, /Empty hotspotGrid\.hotspots, absent typedInput, absent focusInset, clipped or fragmentary content, nonsensical content/);
+  assert.match(source, /Hotspots only help refine reading order; their absence is not evidence that there is no new input\./);
+  assert.match(source, /treat all visible content inside latestInput\.imageRect as the current input/);
+  assert.match(source, /inspect and use the entire attached input image within sourceRect as the current input/);
+  assert.match(source, /return one short write_text clarification question asking what the user wants done with the visible content/);
+  assert.match(source, /commands contains at least one renderable command/);
+  assert.match(source, /"commands":\{"type":"array","minItems":1,"maxItems":16/);
+  assert.match(source, /return \[base, literalTypeset \? NORMALIZE_TYPESET_POLICY : "", MANDATORY_VISIBLE_RESPONSE_PROMPT, JSON_RESPONSE_SCHEMA_PROMPT\]/);
+  assert.match(source, /const PLUGIN_SYSTEM_PROMPT = `Enabled plugin bundles/);
+  assert.match(source, /const PLUGIN_ROUTING_PROMPT = `This plugin routing rule narrows the earlier generic draw guidance/);
+  assert.match(source, /more than about 10 meaningful shapes, nodes, components, or labels/);
+  assert.match(source, /if \(pluginsEnabled\) sections\.push\(PLUGIN_ROUTING_PROMPT, PLUGIN_SYSTEM_PROMPT\)/);
   assert.match(source, /pluginsEnabled = Array\.isArray\(modelInput\?\.enabledPlugins\) && modelInput\.enabledPlugins\.length > 0/);
-  assert.match(source, /function localPluginCatalog\(\)[\s\S]*?entry\.isFile\(\)[\s\S]*?\^\[a-z0-9\][\s\S]*?MAX_LOCAL_PLUGINS/);
+  assert.match(source, /function localPluginCatalog\(\)[\s\S]*?entry\.isFile\(\)[\s\S]*?entry\.isDirectory\(\)[\s\S]*?MAX_LOCAL_PLUGINS/);
   assert.match(source, /process\.env\.PENECHO_PRIVATE_PLUGIN_DIR[\s\S]*?path\.resolve\(process\.env\.PENECHO_PRIVATE_PLUGIN_DIR\)/);
   assert.match(source, /STATE_DIRECTORY[\s\S]*?path\.join\(STATE_DIRECTORY, "plugins", "private"\)/);
   assert.match(source, /function localPluginCatalog\(\)[\s\S]*?PRIVATE_PLUGIN_DIRECTORY[\s\S]*?plugins\/private/);
   assert.match(source, /function saveLocalPluginDocument\([\s\S]*?BUILTIN_PLUGIN_IDS\.has\(manifest\.id\)[\s\S]*?mkdirSync\(PRIVATE_PLUGIN_DIRECTORY/);
   assert.match(source, /function deleteLocalPlugin\([\s\S]*?path\.join\(PRIVATE_PLUGIN_DIRECTORY/);
   assert.match(source, /url\.pathname === "\/api\/plugins"[\s\S]*?localPluginCatalog\(\)/);
-  assert.match(source, /url\.pathname === "\/api\/plugins"[\s\S]*?saveLocalPluginDocument\(body\.document\)/);
-  assert.match(source, /const PLUGIN_AUTHORING_SYSTEM = `[\s\S]*?under 3000 UTF-8 bytes/);
+  assert.match(source, /url\.pathname === "\/api\/plugins"[\s\S]*?saveLocalPluginDocument\(body\.document, body\.styles \|\| ""\)/);
+  assert.match(source, /const PLUGIN_AUTHORING_SYSTEM = `[\s\S]*?under 12000 UTF-8 bytes[\s\S]*?under 32000 UTF-8 bytes/);
   assert.match(source, /url\.pathname === "\/api\/plugins\/improve"[\s\S]*?improvePluginDocument/);
 });
 
@@ -799,7 +1341,7 @@ test("personal plugins use the writable desktop directory and remain fetchable",
     privateDirectory=path.join(stateDir,"desktop-plugins","private"),
     upstream=await startApiServer(),
     running=await startServer(apiServerEnv(upstream.origin,{PENECHO_STATE_DIR:stateDir,PENECHO_PRIVATE_PLUGIN_DIR:privateDirectory})),
-    document=fs.readFileSync(path.join(ROOT,"public","plugins","general.md"),"utf8")
+    document=fs.readFileSync(path.join(ROOT,"public","plugins","general","plugin.md"),"utf8")
       .replace(/^id: general$/m,"id: desktop-private-test")
       .replace(/^name: General HTML$/m,"name: Desktop Private Test")
       .replace(/^# General HTML$/m,"# Desktop Private Test");
@@ -810,22 +1352,28 @@ test("personal plugins use the writable desktop directory and remain fetchable",
     const response=await fetch(`${running.origin}/api/plugins`,{
       method:"POST",
       headers:{"Content-Type":"application/json",Origin:running.origin,Cookie:cookie},
-      body:JSON.stringify({document}),
+      body:JSON.stringify({document,styles:".desktop-private-test { color: #123456; }"}),
     }),body=await response.json();
     assert.equal(response.status,201);
-    assert.equal(body.plugin.path,"plugins/private/desktop-private-test.md");
-    assert.equal(fs.readFileSync(path.join(privateDirectory,"desktop-private-test.md"),"utf8").trim(),document.trim());
+    assert.equal(body.plugin.path,"plugins/private/desktop-private-test/plugin.md");
+    assert.equal(body.plugin.stylePath,"plugins/private/desktop-private-test/styles.css");
+    assert.equal(fs.readFileSync(path.join(privateDirectory,"desktop-private-test","plugin.md"),"utf8").trim(),document.trim());
+    assert.equal(fs.readFileSync(path.join(privateDirectory,"desktop-private-test","styles.css"),"utf8").trim(),".desktop-private-test { color: #123456; }");
 
     const catalog=await fetch(`${running.origin}/api/plugins`).then(value=>value.json()),
-      entry=catalog.plugins.find(plugin=>plugin.path==="plugins/private/desktop-private-test.md");
+      entry=catalog.plugins.find(plugin=>plugin.path==="plugins/private/desktop-private-test/plugin.md");
     assert.equal(entry?.builtIn,false);
+    assert.equal(entry?.stylePath,"plugins/private/desktop-private-test/styles.css");
     const served=await fetch(`${running.origin}/${entry.path}`);
     assert.equal(served.status,200);
     assert.equal((await served.text()).trim(),document.trim());
+    const servedStyles=await fetch(`${running.origin}/${entry.stylePath}`);
+    assert.equal(servedStyles.status,200);
+    assert.equal((await servedStyles.text()).trim(),".desktop-private-test { color: #123456; }");
 
     const removed=await fetch(`${running.origin}/api/plugins/desktop-private-test`,{method:"DELETE",headers:{Origin:running.origin,Cookie:cookie}});
     assert.equal(removed.status,200);
-    assert.equal(fs.existsSync(path.join(privateDirectory,"desktop-private-test.md")),false);
+    assert.equal(fs.existsSync(path.join(privateDirectory,"desktop-private-test")),false);
   } finally {
     await stopServer(running.child);
     await new Promise(resolve=>upstream.server.close(resolve));
@@ -950,14 +1498,96 @@ test("request tracing records upstream failures without credentials", { timeout:
   try {
     const response=await fetch(`${origin}/api/ai/command`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(validPayload())}),body=await response.json(),root=path.join(directory,"logs","requests"),directories=(await fs.promises.readdir(root,{withFileTypes:true})).filter(entry=>entry.isDirectory()).map(entry=>entry.name),name=directories.find(entry=>entry.endsWith(body.requestId));
     assert.equal(response.status,503);
+    assert.equal(body.error,"AI service is temporarily unavailable (HTTP 503). Please retry.");
+    assert.doesNotMatch(body.error,/upstream unavailable/);
     assert.ok(name);
     const trace=JSON.parse(await fs.promises.readFile(path.join(root,name,"trace.json"),"utf8")),serialized=JSON.stringify(trace);
     assert.equal(trace.status,"failed");
     assert.equal(trace.final.httpStatus,503);
     assert.equal(trace.attempts[0].error.status,503);
+    assert.equal(trace.attempts[0].error.phase,"reading-error-response-body");
+    assert.equal(trace.attempts[0].error.transport.response.status,503);
+    assert.equal(trace.attempts[0].error.transport.response.headers["x-request-id"],"test-upstream-request");
     assert.equal(trace.attempts[0].error.upstream.body,"upstream unavailable");
     assert.equal(upstream.requests.length,1);
     assert.equal(serialized.includes("test-key"),false);
+  } finally {
+    await stopServer(child);
+    await new Promise(resolve=>upstream.server.close(resolve));
+    await fs.promises.rm(directory,{recursive:true,force:true});
+  }
+});
+
+test("upstream HTML error pages remain in request traces but never reach the user", { timeout:20000 }, async () => {
+  const directory=await fs.promises.mkdtemp(path.join(os.tmpdir(),"penecho-upstream-html-error-")),
+    upstreamHtml='<!DOCTYPE html><html><head><title>524: A timeout occurred</title></head><body>private proxy details</body></html>',
+    upstream=await startApiServer(upstreamHtml,{status:524}),
+    {child,origin}=await startServer(apiServerEnv(upstream.origin,{PENECHO_STATE_DIR:directory,PENECHO_REQUEST_TRACE:"true"}));
+  try {
+    const response=await fetch(`${origin}/api/ai/command`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(validPayload())}),
+      body=await response.json(),
+      root=path.join(directory,"logs","requests"),
+      name=(await fs.promises.readdir(root)).find(entry=>entry.endsWith(body.requestId)),
+      trace=JSON.parse(await fs.promises.readFile(path.join(root,name,"trace.json"),"utf8"));
+    assert.equal(response.status,524);
+    assert.equal(body.error,"AI service timed out (HTTP 524). Please retry.");
+    assert.doesNotMatch(JSON.stringify(body),/DOCTYPE|private proxy details/);
+    assert.equal(trace.attempts[0].error.upstream.body,upstreamHtml);
+    assert.equal(trace.final.body.error,body.error);
+  } finally {
+    await stopServer(child);
+    await new Promise(resolve=>upstream.server.close(resolve));
+    await fs.promises.rm(directory,{recursive:true,force:true});
+  }
+});
+
+test("disabled request recording omits detailed transport failures and per-request files", { timeout:20000 }, async () => {
+  const directory=await fs.promises.mkdtemp(path.join(os.tmpdir(),"penecho-request-trace-disabled-")),
+    upstream=await startApiServer("upstream unavailable",{status:503}),
+    {child,origin}=await startServer(apiServerEnv(upstream.origin,{PENECHO_STATE_DIR:directory,PENECHO_REQUEST_TRACE:"false"}));
+  try {
+    const response=await fetch(`${origin}/api/ai/command`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(validPayload())}),
+      body=await response.json(),
+      logEntries=(await fs.promises.readFile(path.join(directory,"logs","penecho.log"),"utf8")).trim().split("\n").map(line=>JSON.parse(line)),
+      requestLog=logEntries.find(entry=>entry.requestId===body.requestId);
+    assert.equal(response.status,503);
+    assert.equal(requestLog.error,"upstream-error");
+    assert.equal(Object.hasOwn(requestLog,"failure"),false);
+    assert.equal(fs.existsSync(path.join(directory,"logs","requests")),false);
+  } finally {
+    await stopServer(child);
+    await new Promise(resolve=>upstream.server.close(resolve));
+    await fs.promises.rm(directory,{recursive:true,force:true});
+  }
+});
+
+test("request tracing distinguishes a truncated successful response body from an upstream model failure", { timeout:20000 }, async () => {
+  const directory=await fs.promises.mkdtemp(path.join(os.tmpdir(),"penecho-request-trace-truncated-")),
+    upstream=await startTruncatedApiServer(),
+    {child,origin}=await startServer(apiServerEnv(upstream.origin,{PENECHO_STATE_DIR:directory,PENECHO_REQUEST_TRACE:"true"}));
+  try {
+    const response=await fetch(`${origin}/api/ai/command`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(validPayload())}),
+      body=await response.json(),
+      root=path.join(directory,"logs","requests"),
+      name=(await fs.promises.readdir(root)).find(entry=>entry.endsWith(body.requestId)),
+      trace=JSON.parse(await fs.promises.readFile(path.join(root,name,"trace.json"),"utf8")),
+      logEntries=(await fs.promises.readFile(path.join(directory,"logs","penecho.log"),"utf8")).trim().split("\n").map(line=>JSON.parse(line)),
+      requestLog=logEntries.find(entry=>entry.requestId===body.requestId);
+    assert.equal(response.status,502);
+    assert.equal(trace.status,"failed");
+    assert.equal(trace.attempts[0].error.phase,"reading-response-body");
+    assert.equal(trace.attempts[0].error.transport.response.status,200);
+    assert.equal(trace.attempts[0].error.transport.response.headers["x-request-id"],"truncated-upstream-request");
+    assert.ok(trace.attempts[0].error.transport.responseHeadersAt);
+    assert.ok(trace.attempts[0].error.cause);
+    assert.equal(typeof trace.attempts[0].error.stack,"string");
+    assert.ok(trace.attempts[0].error.stack.length>0);
+    assert.equal(requestLog.failure.phase,"reading-response-body");
+    assert.equal(requestLog.failure.responseReceived,true);
+    assert.equal(requestLog.failure.responseStatus,200);
+    assert.equal(requestLog.failure.upstreamRequestId,"truncated-upstream-request");
+    assert.equal(JSON.stringify(trace).includes("test-key"),false);
+    assert.equal(upstream.requests.length,1);
   } finally {
     await stopServer(child);
     await new Promise(resolve=>upstream.server.close(resolve));
@@ -1030,8 +1660,8 @@ test("Anthropic API mode labels the lossless WebP payload with its matching medi
     const response=await fetch(`${origin}/api/ai/command`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(validPayload())}),body=await response.json();
     assert.equal(response.status,200);
     assert.equal(body.attempts,1);
-    assert.equal(body.commands[0]?.tool,"write_text");
-    assert.equal(body.commands[0]?.text,"hello");
+    assert.deepEqual(body.commands,[]);
+    assert.equal(body.message,"hello");
     assert.equal(upstream.requests.length,1);
     const outbound=JSON.parse(upstream.requests[0]),image=outbound.messages[0].content.find(part=>part.type==="image");
     assert.equal(image.source.media_type,"image/webp");
@@ -1050,6 +1680,8 @@ test("request tracing preserves an upstream response that fails model parsing", 
     assert.ok(name);
     const trace=JSON.parse(await fs.promises.readFile(path.join(root,name,"trace.json"),"utf8"));
     assert.equal(trace.status,"failed");
+    assert.equal(trace.attempts[0].error.phase,"parsing-model-result");
+    assert.equal(trace.attempts[0].error.transport.response.status,200);
     assert.equal(trace.attempts[0].error.upstream.rawContent,"not-json");
   } finally {
     await stopServer(child);
@@ -1142,6 +1774,44 @@ test("API mode retries an invalid draw once and returns the corrected command", 
     const retryRequest=JSON.parse(upstream.requests[1]),retryText=retryRequest.messages[1].content.find(part=>part.type==="text")?.text||"";
     assert.match(retryText,/previous response contained a draw command that PenEcho cannot render/);
     assert.match(retryText,/circle needs exactly three/);
+  } finally {
+    await stopServer(child);
+    await new Promise(resolve=>upstream.server.close(resolve));
+  }
+});
+
+test("manual empty responses preserve full reinspection guidance with a domain-neutral supplement", { timeout: 20000 }, async () => {
+  const empty=JSON.stringify({intent:"none",observedText:"h₁",commands:[]}),
+    corrected=JSON.stringify({intent:"answer",observedText:"hi",commands:[{tool:"write_text",x:0,y:0,text:"Hi!",fontSize:80,maxWidth:400,lineHeight:1.35}]}),
+    upstream=await startApiServer("",{response:({index})=>({body:index===0?empty:corrected})}),
+    {child,origin}=await startServer(apiServerEnv(upstream.origin));
+  try {
+    const payload=validPayload();
+    payload.trigger="manual";
+    payload.userAction="answer";
+    const response=await fetch(`${origin}/api/ai/command`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}),
+      body=await response.json();
+    assert.equal(response.status,200);
+    assert.equal(body.attempts,2);
+    assert.equal(body.commands[0]?.tool,"write_text");
+    assert.equal(body.commands[0]?.text,"Hi!");
+    assert.equal(upstream.requests.length,2);
+    const firstRequest=JSON.parse(upstream.requests[0]),
+      retryRequest=JSON.parse(upstream.requests[1]),
+      systemText=firstRequest.messages[0].content,
+      retryText=retryRequest.messages[1].content.find(part=>part.type==="text")?.text||"",
+      retryInstruction=retryText.split("\n\n").at(-1);
+    assert.doesNotMatch(systemText,/short standalone Latin|dotted lowercase|ambiguous marks alone/);
+    assert.match(retryInstruction,/Perform a second independent inspection/);
+    assert.match(retryInstruction,/Use focusInset as the primary transcription view/);
+    assert.match(retryInstruction,/Inspect any box\/circle-selected content and arrow chain/);
+    assert.match(retryInstruction,/Follow the final arrowhead as the intended destination/);
+    assert.match(retryInstruction,/Every write_text command must include finite global x and y/);
+    assert.match(retryInstruction,/prior transcription may be wrong/);
+    assert.match(retryInstruction,/fulfill modelInput\.userAction or ask one brief clarification question with write_text/);
+    assert.match(retryInstruction,/Use none only when there is no new input/);
+    assert.ok(retryInstruction.length<800,`manual empty retry grew to ${retryInstruction.length} characters`);
+    assert.doesNotMatch(retryInstruction,/\b(?:hi|hello|hey|yo)\b|h₁|subscript/i);
   } finally {
     await stopServer(child);
     await new Promise(resolve=>upstream.server.close(resolve));
