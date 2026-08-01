@@ -556,7 +556,7 @@ test("page reasoning effort maps to OpenAI and Anthropic request fields", { time
   } finally { await stopServer(disabledServer.child); await new Promise(resolve=>disabled.server.close(resolve)); }
 });
 
-test("animation plugin conditionally adds prompt instructions and filters disabled output", { timeout:20000 }, async () => {
+test("legacy animate_scene output is always filtered in favor of General HTML SVG", { timeout:20000 }, async () => {
   const animationCommand = { tool:"animate_scene", x:0, y:0, w:200, h:120, durationMs:1000, loop:true, objects:[{id:"dot",type:"circle",cx:20,cy:20,r:5}], motions:[{type:"spin",target:"dot",periodMs:1000}] },
     responseContent = JSON.stringify({ intent:"answer", commands:[animationCommand] }),
     upstream = await startApiServer(responseContent),
@@ -572,38 +572,8 @@ test("animation plugin conditionally adds prompt instructions and filters disabl
     assert.doesNotMatch(disabledSystem, /animate_scene/);
     assert.doesNotMatch(disabledMetadata, /animationEnabled/);
 
-    const enabledPayload = validPayload();
-    enabledPayload.animationEnabled = true;
-    const enabledResponse = await fetch(`${running.origin}/api/ai/command`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(enabledPayload) }),
-      enabledBody = await enabledResponse.json(),
-      enabledRequest = JSON.parse(upstream.requests[1]),
-      enabledSystem = enabledRequest.messages[0].content,
-      enabledMetadata = enabledRequest.messages[1].content.find(part => part.type === "text").text;
-    assert.equal(enabledResponse.status, 200);
-    assert.equal(enabledBody.commands[0]?.tool, "animate_scene");
-    assert.match(enabledSystem, /at most one animate_scene command/);
-    assert.match(enabledSystem, /32 objects and 32 motions/);
-    assert.match(enabledSystem, /120 <= w <= 5000 and 90 <= h <= 5000/);
-    assert.match(enabledSystem, /appropriate scene dimensions based on the user's actual request/);
-    assert.match(enabledSystem, /5000 is only an upper bound, never a target/);
-    assert.match(enabledSystem, /do not enlarge a scene merely to approach it/);
-    assert.doesNotMatch(enabledSystem, /x \+ w <= 20000, y \+ h <= 20000/);
-    assert.match(enabledSystem, /background is always transparent/);
-    assert.match(enabledSystem, /do not output a background field/);
-    assert.match(enabledSystem, /Every motion MUST have both an explicit "type" and an existing object "target"/);
-    assert.match(enabledSystem, /Never infer or omit the motion type/);
-    assert.match(enabledSystem, /\{"type":"orbit","target":"id"/);
-    assert.match(enabledSystem, /Use lineWidth, not strokeWidth/);
-    assert.match(enabledSystem, /use "transparent", not "none"/);
-    assert.doesNotMatch(enabledSystem, /background\?/);
-    assert.match(enabledMetadata, /"animationEnabled":true/);
-    assert.ok(enabledSystem.length - disabledSystem.length >= 800);
-
-    const invalidPayload = validPayload();
-    invalidPayload.animationEnabled = "true";
-    const invalidResponse = await fetch(`${running.origin}/api/ai/command`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(invalidPayload) });
-    assert.equal(invalidResponse.status, 400);
-    assert.equal(upstream.requests.length, 2);
+    assert.match(fs.readFileSync(path.join(ROOT,"public","plugins","general","plugin.md"),"utf8"), /SVG is the default static and animated visual format/);
+    assert.equal(upstream.requests.length, 1);
   } finally {
     await stopServer(running.child);
     await new Promise(resolve => upstream.server.close(resolve));
@@ -889,6 +859,7 @@ test("enabled plugin documents reach the model and gate html_widget commands", {
     assert.deepEqual(modelInput.widgetGeometry.max, { w:500, h:500 });
     assert.match(modelInput.widgetRenderingPolicy, /Layout and typography must be designed together/);
     assert.match(modelInput.widgetRenderingPolicy, /clamp\(\) with container- or viewport-relative units/);
+    assert.match(modelInput.widgetRenderingPolicy, /Width-only or height-only resizing changes the layout viewport[\s\S]*?SVG or professional-graphic bounds tight on every side with only slight padding/);
     assert.match(modelInput.widgetRenderingPolicy, /prominent without crowding[\s\S]*comfortably readable/);
     assert.match(modelInput.widgetRenderingPolicy, /Do not fix overflow by making text excessively small[\s\S]*do not use oversized text/);
     assert.match(modelInput.widgetRenderingPolicy, /reflowing, regrouping, shortening secondary copy, or choosing a more appropriate widget size/);
@@ -1276,17 +1247,33 @@ test("widget host CSP permits on-demand HTTPS resources inside the isolated widg
     assert.equal(response.status, 200);
     assert.match(policy, /script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' https:/);
     assert.match(policy, /style-src 'unsafe-inline' https:/);
-    assert.match(policy, /connect-src https:/);
+    assert.match(policy, /connect-src 'self' https:/);
     assert.match(policy, /img-src data: blob: https:/);
     assert.match(policy, /frame-ancestors 'self'/);
     const offlinePolicy = (await fetch(`${origin}/widget-host.html`)).headers.get("content-security-policy");
-    assert.match(offlinePolicy, /connect-src https:/);
+    assert.match(offlinePolicy, /connect-src 'self' https:/);
     const renderer = await fetch(`${origin}/widget-renderer.js`);
     assert.equal(renderer.status, 200);
     assert.match(renderer.headers.get("content-type"), /^application\/javascript/);
     assert.equal(renderer.headers.get("cross-origin-resource-policy"), "cross-origin");
     assert.equal(renderer.headers.get("access-control-allow-origin"), "*");
     assert.match(await renderer.text(), /html2canvas/);
+
+    const privateData = await fetch(`${origin}/api/widget-fetch?url=${encodeURIComponent("https://127.0.0.1/")}`, { headers:{ Origin:origin } });
+    assert.equal(privateData.status, 403);
+    assert.match(await privateData.text(), /Local and private destinations/);
+    const configScript = await fetch(`${origin}/api/config.js`).then(response => response.text()),
+      accessSession = /"accessSessionToken":"([A-Za-z0-9_-]+)"/.exec(configScript)?.[1];
+    assert.match(accessSession, /^[A-Za-z0-9_-]{40,}$/);
+    const sandboxedWidgetData = await fetch(`${origin}/api/widget-fetch`, {
+      method:"POST",
+      headers:{ "Content-Type":"application/json", "X-PenEcho-Session":accessSession },
+      body:JSON.stringify({ url:"https://127.0.0.1:8443/image.png" }),
+    });
+    assert.equal(sandboxedWidgetData.status, 403);
+    assert.match(await sandboxedWidgetData.text(), /Local and private destinations/);
+    assert.equal((await fetch(`${origin}/api/widget-fetch?url=${encodeURIComponent("http://example.com/")}`, { headers:{ Origin:origin } })).status, 400);
+    assert.equal((await fetch(`${origin}/api/widget-fetch?url=${encodeURIComponent("https://example.com/")}`)).status, 403);
 
     for (const values of [
       ["https://*.open-meteo.com"],
@@ -1310,6 +1297,7 @@ test("local plugin discovery is constrained and widget prompting is conditional"
   assert.match(basePrompt, /If the newest input is non-empty but unclear, incomplete, or lacks enough context, return one short write_text clarification question stating what is missing\./);
   assert.match(basePrompt, /Use intent none with an empty commands array only when there is genuinely no new input\./);
   assert.doesNotMatch(basePrompt, /If genuinely unreadable or incomplete, use intent none/);
+  assert.match(basePrompt, /existing canvas objects as actors, anchors, background, or targets[\s\S]*?overlay only the newly requested paths, effects, or actions[\s\S]*?never recreate those objects/);
   assert.match(source, /const MANDATORY_VISIBLE_RESPONSE_PROMPT = `Mandatory final visible-response fallback/);
   assert.match(source, /Empty hotspotGrid\.hotspots, absent typedInput, absent focusInset, clipped or fragmentary content, nonsensical content/);
   assert.match(source, /Hotspots only help refine reading order; their absence is not evidence that there is no new input\./);
@@ -1320,8 +1308,13 @@ test("local plugin discovery is constrained and widget prompting is conditional"
   assert.match(source, /"commands":\{"type":"array","minItems":1,"maxItems":16/);
   assert.match(source, /return \[base, literalTypeset \? NORMALIZE_TYPESET_POLICY : "", MANDATORY_VISIBLE_RESPONSE_PROMPT, JSON_RESPONSE_SCHEMA_PROMPT\]/);
   assert.match(source, /const PLUGIN_SYSTEM_PROMPT = `Enabled plugin bundles/);
-  assert.match(source, /const PLUGIN_ROUTING_PROMPT = `This plugin routing rule narrows the earlier generic draw guidance/);
-  assert.match(source, /more than about 10 meaningful shapes, nodes, components, or labels/);
+  assert.match(source, /clamp\(36px,1\.2cqw,52px\)[\s\S]*?at least 28px[\s\S]*?clamp\(52px,2cqw,80px\)[\s\S]*?14–16px are too small/);
+  assert.match(source, /Width-only or height-only resizing changes the layout viewport[\s\S]*?SVG or professional-graphic bounds tight on every side with only slight padding/);
+  assert.match(source, /Public HTTPS reference links are allowed[\s\S]*?target="_blank"[\s\S]*?noopener noreferrer[\s\S]*?never navigate the widget itself/);
+  assert.match(source, /const PLUGIN_ROUTING_PROMPT = `General HTML is mandatory and always enabled/);
+  assert.match(source, /Use native draw only[\s\S]*?10 or fewer basic primitives or line segments[\s\S]*?larger static visuals[\s\S]*?General HTML/);
+  assert.match(source, /filterCapabilityCommands[\s\S]*?command\?\.tool !== "animate_scene"/);
+  assert.match(source, /current or changing public information such as news[\s\S]*?network-backed html_widget[\s\S]*?refreshSeconds interval[\s\S]*?update frequency and rate limits/);
   assert.match(source, /if \(pluginsEnabled\) sections\.push\(PLUGIN_ROUTING_PROMPT, PLUGIN_SYSTEM_PROMPT\)/);
   assert.match(source, /pluginsEnabled = Array\.isArray\(modelInput\?\.enabledPlugins\) && modelInput\.enabledPlugins\.length > 0/);
   assert.match(source, /function localPluginCatalog\(\)[\s\S]*?entry\.isFile\(\)[\s\S]*?entry\.isDirectory\(\)[\s\S]*?MAX_LOCAL_PLUGINS/);
@@ -1745,7 +1738,7 @@ test("request tracing preserves a client-cancelled model attempt", { timeout: 20
   }
 });
 
-test("API mode does not retry or reject a valid in-canvas draw because of aggregate area", { timeout: 20000 }, async () => {
+test("API mode accepts a valid simple native draw", { timeout: 20000 }, async () => {
   const responseContent=JSON.stringify({intent:"plot",commands:[{tool:"draw",origin:[100,100],types:["rect"],items:[[0,0,4000,4000]]}]}),upstream=await startApiServer(responseContent),{child,origin}=await startServer(apiServerEnv(upstream.origin));
   try {
     const payload=validPayload();payload.trigger="manual";payload.userAction="plot";
@@ -1759,7 +1752,7 @@ test("API mode does not retry or reject a valid in-canvas draw because of aggreg
   }
 });
 
-test("API mode retries an invalid draw once and returns the corrected command", { timeout: 20000 }, async () => {
+test("API mode retries an invalid native draw without restoring legacy animation", { timeout: 20000 }, async () => {
   const invalid=JSON.stringify({intent:"continue",observedText:"draw a dog",commands:[{tool:"draw",origin:[1000,1000],types:["circle","line"],items:[[0,0,100,200],[0,0,200]]}]}),
     corrected=JSON.stringify({intent:"continue",observedText:"draw a dog",commands:[{tool:"draw",origin:[1000,1000],types:["ellipse","circle"],items:[[0,0,100,200],[0,0,20]]}]}),
     upstream=await startApiServer("",{response:({index})=>({body:index===0?invalid:corrected})}),
@@ -1768,12 +1761,11 @@ test("API mode retries an invalid draw once and returns the corrected command", 
     const response=await fetch(`${origin}/api/ai/command`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(validPayload())}),body=await response.json();
     assert.equal(response.status,200);
     assert.equal(body.attempts,2);
-    assert.equal(upstream.requests.length,2);
-    assert.equal(body.commands.length,1);
-    assert.deepEqual(body.commands[0].types,["ellipse","circle"]);
+    assert.deepEqual(body.commands[0]?.types,["ellipse","circle"]);
     const retryRequest=JSON.parse(upstream.requests[1]),retryText=retryRequest.messages[1].content.find(part=>part.type==="text")?.text||"";
-    assert.match(retryText,/previous response contained a draw command that PenEcho cannot render/);
-    assert.match(retryText,/circle needs exactly three/);
+    assert.match(retryText,/previous response contained a draw command/);
+    assert.match(retryText,/10 or fewer basic primitives or line segments/);
+    assert.doesNotMatch(retryText,/animate_scene/);
   } finally {
     await stopServer(child);
     await new Promise(resolve=>upstream.server.close(resolve));
@@ -1812,22 +1804,6 @@ test("manual empty responses preserve full reinspection guidance with a domain-n
     assert.match(retryInstruction,/Use none only when there is no new input/);
     assert.ok(retryInstruction.length<800,`manual empty retry grew to ${retryInstruction.length} characters`);
     assert.doesNotMatch(retryInstruction,/\b(?:hi|hello|hey|yo)\b|h₁|subscript/i);
-  } finally {
-    await stopServer(child);
-    await new Promise(resolve=>upstream.server.close(resolve));
-  }
-});
-
-test("API mode never makes a second retry when the corrected draw is still invalid", { timeout: 20000 }, async () => {
-  const invalid=JSON.stringify({intent:"continue",commands:[{tool:"draw",origin:[1000,1000],types:["circle"],items:[[0,0,100,200]]}]}),
-    upstream=await startApiServer(invalid),
-    {child,origin}=await startServer(apiServerEnv(upstream.origin));
-  try {
-    const response=await fetch(`${origin}/api/ai/command`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(validPayload())}),body=await response.json();
-    assert.equal(response.status,200);
-    assert.equal(body.attempts,2);
-    assert.equal(upstream.requests.length,2);
-    assert.deepEqual(body.commands,[]);
   } finally {
     await stopServer(child);
     await new Promise(resolve=>upstream.server.close(resolve));
@@ -2102,7 +2078,7 @@ test("API mode uses one configured key without probes or fallback credentials", 
 });
 
 test("client and server contain no aggregate draft rejection budget", () => {
-  const app=fs.readFileSync(path.join(ROOT,"public","app.js"),"utf8"),draw=fs.readFileSync(path.join(ROOT,"public","draw.js"),"utf8"),server=fs.readFileSync(path.join(ROOT,"src","server","main.js"),"utf8");
-  for(const source of [app,draw,server])assert.doesNotMatch(source,/Draft destination budget|Draft raster budget|MAX_DRAFT_RASTER_PIXELS|MAX_LOGICAL_PIXELS|MAX_DESTINATION_TILES/);
+  const app=fs.readFileSync(path.join(ROOT,"public","app.js"),"utf8"),server=fs.readFileSync(path.join(ROOT,"src","server","main.js"),"utf8");
+  for(const source of [app,server])assert.doesNotMatch(source,/Draft destination budget|Draft raster budget|MAX_DRAFT_RASTER_PIXELS|MAX_LOGICAL_PIXELS|MAX_DESTINATION_TILES/);
   assert.doesNotMatch(server,/padded union bounds may total at most|intersect at most 64/);
 });

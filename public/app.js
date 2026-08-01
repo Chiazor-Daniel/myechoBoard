@@ -139,7 +139,8 @@
     MAX_WIDGET_COPY_TEXT_LENGTH = 16000,
     MAX_DIAGRAM_SOURCE_BYTES = 100 * 1024,
     MAX_WIDGET_CONTENT_DIMENSION = 1000000,
-    WIDGET_SNAPSHOT_TIMEOUT_MS = 12000;
+    WIDGET_SNAPSHOT_TIMEOUT_MS = 20000,
+    WIDGET_HISTORY_SNAPSHOT_WAIT_MS = 3000;
   const PLUGIN_TEMPLATE_DOCUMENTS = Object.freeze({
     simple: `---
 penecho-plugin: 1
@@ -333,17 +334,13 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       changelogDialog: "PenEcho release notes",
       changelogClose: "Close release notes",
       changelogBadge: "What's new",
-      changelogTitle: "Professional diagrams, editable source, and precise refinement",
-      changelogIntro: "Version 0.8.0 expands PenEcho from flowcharts into professional engineering, scientific, software, and business diagrams.",
-      changelogPluginEnableNote: "Professional Diagrams is on by default. You can turn it off at any time from Plugins.",
-      changelogVisualPlugins: "Professional Diagrams chooses an appropriate editable domain format. Supported formats render locally in the existing iframe; specialized or unlisted formats can use generated HTML while preserving copyable professional source.",
-      changelogCanvasWorkflow: "Draw or describe the professional diagram you need; PenEcho chooses a suitable format and returns it as a canvas widget.",
-      changelogPluginRefine: "Plugin-returned widgets can be refined directly: draw the requested changes over the widget with the Pen, then click the Refine button that appears. This workflow applies only to plugin widgets.",
-      changelogDesktopAccess: "Professional Diagrams is second in the plugin list and on by default. Its compact capability guide adds about 1.5k–2k prompt tokens per AI request; full renderer CSS and libraries stay local and load only when needed.",
+      changelogTitle: "Live public data and more expressive SVG visuals",
+      changelogIntro: "Version 0.8.1 gives General HTML widgets reliable public-data access and makes SVG the default for animation and complex graphics.",
+      changelogVisualPlugins: "When browser CORS blocks a public HTTPS API, RSS feed, or image, General HTML widgets can fall back to PenEcho's local read-only bridge for live, refreshable content without exposing credentials.",
+      changelogCanvasWorkflow: "Animations and complex custom visuals now default to responsive SVG, enabling richer motion, overlays, and scalable graphics while keeping model output compact and token-efficient. Legacy declarative animations no longer load, while older canvases still open without errors.",
       changelogEarlierTitle: "Earlier highlights",
-      changelogImagesSummary: "0.7.2 added sourced web photos, more reliable canvas persistence and export, and simpler protected local access.",
-      changelogPluginsSummary: "0.7.1 added local images and photos with canvas-native editing, snapshots, PNG export, and early copyable flowcharts.",
-      changelogAnimation: "0.7.0 introduced sandboxed HTML plugins; 0.6.0 introduced controllable declarative animation scenes.",
+      changelogImagesSummary: "0.8.0 added professional diagrams with editable source, direct widget refinement, server-backed canvas storage, and richer clipboard workflows.",
+      changelogPluginsSummary: "0.7.2 added sourced web photos, more reliable canvas persistence and export, and simpler protected local access.",
       changelogDone: "Got it",
       settingsTitle: "Settings",
       settingsClose: "Close settings",
@@ -495,6 +492,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       pluginSourceLabel: "Source: {source}",
       pluginApiLabel: "API: {origins}",
       pluginNoNetwork: "No network access",
+      pluginPublicHttps: "Any public HTTPS origin",
       pluginPromptEstimate: "adds about {tokens} prompt tokens to each AI request while enabled; once on canvas, display, interaction, refresh, and rendering use no tokens",
       pluginRefreshRate: "refresh {time}",
       pluginDetails: "Details",
@@ -592,19 +590,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
   const PLUGIN_STORAGE_KEY = "penecho-plugins",
     DIAGRAM_RUNTIME_VERSION = "penecho-diagram-source-v1",
     DIAGRAM_SOURCE_FORMATS = new Set(["mermaid", "dot", "bpmn-xml", "vega-lite", "geojson", "smiles", "cytoscape-json"]),
-    BUILTIN_PLUGIN_DEFINITIONS = Object.freeze([
-      Object.freeze({
-        id: "animation",
-        labelKey: "animationPlugin",
-        costKey: "animationPluginCost",
-        helpKey: "animationPluginDisabledHelp",
-        requestField: "animationEnabled",
-        builtIn: true,
-        defaultEnabled: true,
-        legacyStorageKey: "penecho-animation-plugin",
-        onChange: applyAnimationPluginState,
-      }),
-    ]);
+    BUILTIN_PLUGIN_DEFINITIONS = Object.freeze([]);
   const PLUGIN_DEFINITIONS = [...BUILTIN_PLUGIN_DEFINITIONS];
   const pluginManifests = new Map(),
     pluginLoadErrors = new Map(),
@@ -786,7 +772,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
   const AI_SUPERSEDED = "AI_SUPERSEDED";
   const FEATURE_TOUR_STORAGE_KEY = "penecho-tour-progress";
   const CHANGELOG_STORAGE_KEY = "penecho-changelog-seen";
-  const CHANGELOG_VERSION = "0.8.0";
+  const CHANGELOG_VERSION = "0.8.1";
   // Keep seen IDs stable. Add a new ID (or bump its -vN suffix) to show only that feature to returning users.
   const FEATURE_TOUR_STEPS = Object.freeze([
     { id: "core-effort-v1", targets: ["#aiEffortButton"], titleKey: "tourEffortTitle", bodyKey: "tourEffortBody", placement: "bottom", radius: 8 },
@@ -1453,7 +1439,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     keepEffortControlOpen();
   }
   function pluginEnabled(pluginId) {
-    return state.plugins[pluginId] === true;
+    return pluginId === "general" || state.plugins[pluginId] === true;
   }
   function diagramRuntime() {
     return window.PENECHO_DIAGRAM_RUNTIME || null;
@@ -1595,7 +1581,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
           documentPath:item.documentPath,
           stylePath:item.stylePath,
           builtIn:item.builtIn,
-          defaultEnabled:["general", "flowchart", "image-search", "weather"].includes(item.manifest.id),
+          defaultEnabled:["general", "flowchart"].includes(item.manifest.id),
         }));
       }
       definitions.sort((a, b) => (manifests.get(a.id)?.name || a.id).localeCompare(manifests.get(b.id)?.name || b.id));
@@ -1693,7 +1679,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
         input.type = "checkbox";
         input.dataset.pluginId = plugin.id;
         input.checked = pluginEnabled(plugin.id);
-        input.disabled = Boolean(plugin.documentPath && !pluginManifests.has(plugin.id));
+        input.disabled = plugin.id === "general" || Boolean(plugin.documentPath && !pluginManifests.has(plugin.id));
         copy.className = "plugin-option-copy";
         titleRow.className = "plugin-option-title";
         title.textContent = plugin.labelKey ? t(plugin.labelKey) : localizedManifestValue(manifest, "name") || plugin.id;
@@ -1721,7 +1707,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
           sourceItem.className = "plugin-option-source";
           sourceItem.textContent = t("pluginSourceLabel").replace("{source}", source);
           apiItem.className = "plugin-option-api";
-          apiItem.textContent = t("pluginApiLabel").replace("{origins}", manifest.connect.length ? manifest.connect.join(" · ") : t("pluginNoNetwork"));
+          apiItem.textContent = t("pluginApiLabel").replace("{origins}", plugin.id === "general" ? t("pluginPublicHttps") : manifest.connect.length ? manifest.connect.join(" · ") : t("pluginNoNetwork"));
           refreshItem.textContent = pluginRefreshText(manifest.recommendedRefreshSeconds);
           tokenItem.textContent = t("pluginPromptEstimate").replace("{tokens}", String(tokens));
           meta.append(sourceItem, apiItem, refreshItem, tokenItem);
@@ -2202,6 +2188,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
   async function setPluginEnabled(pluginId, enabled) {
     const plugin = PLUGIN_DEFINITIONS.find((item) => item.id === pluginId);
     if (!plugin) return false;
+    if (pluginId === "general") enabled = true;
     if (enabled && plugin.documentPath && !pluginManifests.has(pluginId)) return false;
     if (enabled) {
       try { await ensurePluginRuntime(pluginId); }
@@ -2429,6 +2416,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
   }
   const key = (x, y) => `${x},${y}`;
 // Canvas tiles, widgets, animations, rendering, navigation, and text editing.
+  const WIDGET_REFINE_PROXIMITY_PX = 24;
   const objectChromeButtons = new Map();
   let nextObjectChromeStyleId = 1;
   function tile(tx, ty, create = true) {
@@ -3104,6 +3092,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       url.hostname = "localhost";
       url.searchParams.set("parent-origin", location.origin);
     }
+    if (configuredAccessSession) url.searchParams.set("access-session", configuredAccessSession);
     for (const origin of manifest.connect) url.searchParams.append("connect", origin);
     return url.href;
   }
@@ -3257,38 +3246,39 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       image.src = dataUrl;
     });
   }
-  async function waitForWidgetContent(widget) {
+  async function waitForWidgetContent(widget, timeoutMs = WIDGET_SNAPSHOT_TIMEOUT_MS) {
     if (widget.contentReady) return;
     if (!widget.readyPromise) throw Error(t("widgetExportFailed"));
     await Promise.race([
       widget.readyPromise,
-      new Promise((_, reject) => setTimeout(() => reject(Error(t("widgetExportFailed"))), WIDGET_SNAPSHOT_TIMEOUT_MS)),
+      new Promise((_, reject) => setTimeout(() => reject(Error(t("widgetExportFailed"))), timeoutMs)),
     ]);
   }
-  async function requestWidgetSnapshot(widget) {
+  async function requestWidgetSnapshot(widget, timeoutMs = WIDGET_SNAPSHOT_TIMEOUT_MS) {
     if (widget.snapshotPromise) return widget.snapshotPromise;
+    timeoutMs = Math.max(1000, Math.min(WIDGET_SNAPSHOT_TIMEOUT_MS, Number(timeoutMs) || WIDGET_SNAPSHOT_TIMEOUT_MS));
     const snapshotPromise = (async () => {
       const previousActive = widget.renderActive;
       try {
         if (!widget.hostReady && widget.hostReadyPromise) await Promise.race([
           widget.hostReadyPromise,
-          new Promise((_, reject) => setTimeout(() => reject(Error(t("widgetExportFailed"))), WIDGET_SNAPSHOT_TIMEOUT_MS)),
+          new Promise((_, reject) => setTimeout(() => reject(Error(t("widgetExportFailed"))), timeoutMs)),
         ]);
         if (!widget.initialized) {
           widget.renderActive = true;
           sendWidgetInit(widget);
           sendWidgetHostState(widget, undefined, undefined, true);
         }
-        await waitForWidgetContent(widget);
+        await waitForWidgetContent(widget, timeoutMs);
         if (!widget.frame?.contentWindow) throw Error(t("widgetExportFailed"));
         const requestId = crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`;
         return await new Promise((resolve, reject) => {
           const timer = setTimeout(() => {
             widgetSnapshotRequests.delete(requestId);
             reject(Error(t("widgetExportFailed")));
-          }, WIDGET_SNAPSHOT_TIMEOUT_MS);
+          }, timeoutMs);
           widgetSnapshotRequests.set(requestId, { widget, resolve, reject, timer });
-          widget.frame.contentWindow.postMessage({ type:"penecho-widget-snapshot-request", requestId, width:widget.contentW, height:widget.contentH }, widget.hostOrigin || location.origin);
+          widget.frame.contentWindow.postMessage({ type:"penecho-widget-snapshot-request", requestId, width:widget.contentW, height:widget.contentH, timeoutMs }, widget.hostOrigin || location.origin);
         });
       } finally {
         if (previousActive === false) {
@@ -3350,6 +3340,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     widgetSnapshotRequests.delete(message.requestId);
     clearTimeout(pending.timer);
     if (message.type === "penecho-widget-snapshot-error" || typeof message.dataUrl !== "string" || !message.dataUrl.startsWith("data:image/png;base64,")) {
+      if (message.type === "penecho-widget-snapshot-error") console.warn("PenEcho widget snapshot failed:", String(message.error || "unknown error").slice(0, 300));
       pending.reject(Error(t("widgetExportFailed")));
       return;
     }
@@ -3843,8 +3834,14 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       context.drawImage(widget.snapshotImage, widget.x, widget.y, widget.w, widget.h);
     }
   }
-  async function snapshotVisibleWidgets() {
-    for (const widget of visibleWidgets()) await requestWidgetSnapshot(widget);
+  async function snapshotVisibleWidgets({ bestEffort = false } = {}) {
+    const timeoutMs = bestEffort ? WIDGET_HISTORY_SNAPSHOT_WAIT_MS : WIDGET_SNAPSHOT_TIMEOUT_MS,
+      requests = visibleWidgets().map((widget) => requestWidgetSnapshot(widget, timeoutMs));
+    if (!bestEffort) return void await Promise.all(requests);
+    await Promise.all(requests.map((request) => Promise.race([
+      request.catch(() => null),
+      new Promise((resolve) => setTimeout(resolve, WIDGET_HISTORY_SNAPSHOT_WAIT_MS)),
+    ])));
   }
 
   function animationBox(animation) {
@@ -3908,35 +3905,8 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     state.selectedAnimationId = null;
     state.animationEdit = null;
     hideAnimationControls();
-    const now = performance.now(),
-      usedIds = new Set();
-    for (const saved of Array.isArray(items) ? items : []) {
-      if (state.animations.length >= MAX_VISIBLE_ANIMATIONS) break;
-      const scene = ANIMATION?.normalize(saved?.scene, SIZE),
-        transform = saved?.transform;
-      if (!scene || !transform || ![transform.x, transform.y, transform.w, transform.h].every(Number.isFinite) || transform.w <= 0 || transform.h <= 0 || transform.x < 0 || transform.y < 0 || transform.x + transform.w > SIZE || transform.y + transform.h > SIZE) continue;
-      const playheadMs = Math.max(0, Math.min(scene.durationMs, Number(saved.playback?.playheadMs) || 0)),
-        paused = Boolean(saved.playback?.paused);
-      let id = typeof saved.id === "string" && saved.id.length <= 128 && !usedIds.has(saved.id) ? saved.id : "";
-      const numberedId = /^animation-(\d+)$/.exec(id);
-      if (numberedId) state.nextAnimationId = Math.max(state.nextAnimationId, Number(numberedId[1]) + 1);
-      if (!id) {
-        do id = "animation-" + state.nextAnimationId++;
-        while (usedIds.has(id));
-      }
-      usedIds.add(id);
-      state.animations.push({
-        id,
-        scene,
-        x: transform.x,
-        y: transform.y,
-        w: transform.w,
-        h: transform.h,
-        playheadMs,
-        paused,
-        startedAt: now,
-      });
-    }
+    // Legacy declarative animation scenes are intentionally no longer loaded.
+    // Keeping this tolerant hook lets snapshots from older releases open silently.
     requestAnimationLayerRender();
   }
   function recordAnimationsBefore() {
@@ -4517,9 +4487,9 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     for (const point of points) {
       const next = pointDistanceToWidget(point, widget) * state.scale;
       distance = Math.min(distance, next);
-      if (next <= 48) hits++;
+      if (next <= WIDGET_REFINE_PROXIMITY_PX) hits++;
     }
-    return distance <= 48 ? { distance, hits } : null;
+    return distance <= WIDGET_REFINE_PROXIMITY_PX ? { distance, hits } : null;
   }
   function clearWidgetRefineCandidate() {
     state.widgetRefineCandidate = null;
@@ -5346,14 +5316,28 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
   }
   function cancelTextEditor(editor) {
     if (!editor || editor.committing) return;
-    if (editor.sourceTextBoxId) state.selectedTextBoxId = null;
+    let deletedTextBox = null;
+    if (editor.sourceTextBoxId) {
+      const index = state.textBoxes.findIndex((item) => item.id === editor.sourceTextBoxId);
+      if (index >= 0) {
+        recordTextBoxesBefore();
+        deletedTextBox = state.textBoxes[index];
+        state.textBoxes.splice(index, 1);
+      }
+      state.selectedTextBoxId = null;
+    }
     removeTextEditor(editor);
     blockCanvasInput(TEXT_INPUT_GUARD_MS);
     if (editor.returnMode) restoreTextEditorMode(editor);
     else setCanvasMode("pen");
+    if (deletedTextBox) {
+      state.userRevision++;
+      mergeDirtyBox(textBoxBox(deletedTextBox));
+      save();
+    }
     render();
     setStatusKey("ready");
-    if (!state.textEditors.size && state.auto && state.autoEligible) schedule(Math.max(1000, state.autoDelayMs));
+    if (!deletedTextBox && !state.textEditors.size && state.auto && state.autoEligible) schedule(Math.max(1000, state.autoDelayMs));
   }
   function createTextEditor(point, options = null) {
     options ||= {};
@@ -5469,9 +5453,6 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && !event.isComposing) {
         event.preventDefault();
         confirmTextEditor(editor);
-      } else if (event.key === "Escape") {
-        event.preventDefault();
-        cancelTextEditor(editor);
       }
     });
     preview.addEventListener("focus", () => focusTextEditor(editor));
@@ -5480,9 +5461,6 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && !event.isComposing) {
         event.preventDefault();
         confirmTextEditor(editor);
-      } else if (event.key === "Escape") {
-        event.preventDefault();
-        cancelTextEditor(editor);
       }
     });
     helpButton.addEventListener("click", (event) => {
@@ -5846,6 +5824,14 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
     return new Blob([bytes], { type:match[1] });
   }
+  async function snapshotPreviewBlob() {
+    try {
+      return await canvasBlob(snapshotPreview());
+    } catch (error) {
+      console.warn("PenEcho snapshot thumbnail failed; saving with a fallback thumbnail:", error);
+      return dataUrlBlob("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
+    }
+  }
   async function snapshotApiResponse(response) {
     let body = null;
     try { body = await response.json(); } catch {}
@@ -6098,7 +6084,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       setStatusKey("emptyCanvas");
       return null;
     }
-    await snapshotVisibleWidgets();
+    await snapshotVisibleWidgets({ bestEffort:true });
     const nameInput = document.querySelector("#historyName"),
       existing = overwriteId ? snapshotItems.find((item) => item.id === overwriteId) : null,
       id = overwriteId || `${Date.now()}-${crypto.randomUUID?.() || Math.random().toString(36).slice(2)}`,
@@ -6108,7 +6094,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       textBoxes = storedTextBoxes(),
       images = storedImages(),
       tileEntries = await Promise.all([...tiles].map(async ([k, canvas]) => ({ k, blob: await canvasBlob(canvas) }))),
-      preview = await canvasBlob(snapshotPreview()),
+      preview = await snapshotPreviewBlob(),
       requestedName = String(name === null ? nameInput.value : name).trim().slice(0, 48),
       item = {
         id,
@@ -6415,6 +6401,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       backdrop = document.querySelector("#historyBackdrop"),
       button = document.querySelector("#historyBtn");
     backdrop.hidden = false;
+    panel.inert = false;
     panel.classList.add("open");
     panel.setAttribute("aria-hidden", "false");
     button.setAttribute("aria-expanded", "true");
@@ -6425,6 +6412,8 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     const panel = document.querySelector("#historyPanel"),
       backdrop = document.querySelector("#historyBackdrop"),
       button = document.querySelector("#historyBtn");
+    if (panel.contains(document.activeElement)) button.focus({ preventScroll:true });
+    panel.inert = true;
     panel.classList.remove("open");
     panel.setAttribute("aria-hidden", "true");
     button.setAttribute("aria-expanded", "false");
@@ -7305,7 +7294,6 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       if (state.activeAI === run) setBusy(false);
       const rawCommands = Array.isArray(data.commands) ? data.commands : [],
         rawCount = rawCommands.length,
-        animationLimitReached = pluginEnabled("animation") && state.animations.length >= MAX_VISIBLE_ANIMATIONS && rawCommands.some((command) => (command?.tool || command?.type || command?.name) === "animate_scene"),
         widgetLimitReached = !widgetEditTarget && state.widgets.length >= MAX_VISIBLE_WIDGETS && rawCommands.some((command) => ["html_widget", "diagram_source"].includes(command?.tool || command?.type || command?.name)),
         commands = normalizeCommandPlacements(validate(rawCommands, aiColor, widgetEditTarget, packed.visibleRect), packed, requestBox),
         meta = { requestId: data.requestId };
@@ -7369,8 +7357,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
           run.inputConsumed = true;
         }
         if (!isolatedSelection) save();
-        if (animationLimitReached) setStatusKey("animationLimitReached");
-        else if (widgetLimitReached) setStatusKey("widgetLimitReached");
+        if (widgetLimitReached) setStatusKey("widgetLimitReached");
         else if (data.message) setStatus(data.message);
         else setStatusKey("aiDone");
       } else {
@@ -7379,8 +7366,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
           if (hotspotCount) state.hotspotTrail.splice(0, hotspotCount);
           if (state.latestTypedInput === typedInput) state.latestTypedInput = null;
         }
-        if (animationLimitReached) setStatusKey("animationLimitReached");
-        else if (widgetLimitReached) setStatusKey("widgetLimitReached");
+        if (widgetLimitReached) setStatusKey("widgetLimitReached");
         else if (typeof data.message === "string" && data.message.trim()) setStatus(data.message.trim());
         else setStatusKey("aiNoVisibleResponse");
       }
@@ -7772,12 +7758,9 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
   function validate(cmds, aiColor = state.aiColor, widgetEditTarget = null, visibleRect = null) {
     if (!Array.isArray(cmds)) return [];
     let plotPixels = 0,
-      animationSlots = pluginEnabled("animation") ? Math.max(0, MAX_VISIBLE_ANIMATIONS - state.animations.length) : 0,
       widgetSlots = widgetEditTarget ? 1 : Math.max(0, MAX_VISIBLE_WIDGETS - state.widgets.length),
       widgetPluginIds = new Set(enabledPluginDescriptors().map((plugin) => plugin.id));
-    const acceptedTools = pluginEnabled("animation")
-      ? ["write_text", "draw_formula", "plot_function", "draw", "animate_scene", "erase"]
-      : ["write_text", "draw_formula", "plot_function", "draw", "erase"];
+    const acceptedTools = ["write_text", "draw_formula", "plot_function", "draw", "erase"];
     if (widgetPluginIds.size) acceptedTools.push("html_widget");
     if (widgetPluginIds.has("flowchart")) acceptedTools.push("diagram_source");
     const validated = cmds
@@ -7819,14 +7802,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
         if (c.tool === "draw") {
           const normalized = DRAW?.normalize(c, SIZE);
           if (!normalized) return null;
-          c = { ...normalized, color: aiColor };
-        }
-        if (c.tool === "animate_scene") {
-          if (animationSlots <= 0) return null;
-          const normalized = ANIMATION?.normalize(c, SIZE);
-          if (!normalized) return null;
-          c = normalized;
-          animationSlots--;
+          c = { ...normalized, color:aiColor };
         }
         if (c.tool === "html_widget") {
           const allowCopy = c.pluginId !== "image-search",
@@ -7951,8 +7927,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
         } else if (c.tool === "animate_scene") {
           pendingCommand = ANIMATION.normalize(c, SIZE);
           image = pendingCommand ? ANIMATION.rasterize(pendingCommand, offscreen, 0, Math.min(2, sharpRenderRatio())) : null;
-        }
-        else if (c.tool === "draw") {
+        } else if (c.tool === "draw") {
           const made = DRAW.render(c, offscreen, c.color);
           image = made.image;
           x = made.x;
@@ -7992,8 +7967,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     else if (c.tool === "animate_scene") {
       pendingCommand = ANIMATION.normalize(c, SIZE);
       image = pendingCommand ? ANIMATION.rasterize(pendingCommand, offscreen, 0, Math.min(2, sharpRenderRatio())) : null;
-    }
-    else if (c.tool === "draw") {
+    } else if (c.tool === "draw") {
       const made = DRAW.render(c, offscreen, c.color);
       image = made.image;
       x = made.x;
@@ -9786,8 +9760,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     const drawing = state.drawing,
       next = state.mode === "eraser"
         && event.pointerType !== "touch"
-        && drawing?.erase
-        && drawing.id === event.pointerId
+        && (!drawing || drawing.erase && drawing.id === event.pointerId)
         ? clientPoint(event)
         : null,
       preview = next && valid(next) ? next : null,
