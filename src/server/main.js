@@ -175,7 +175,7 @@ const LOCAL_ACCESS_CLIENT_FAILURE_LIMIT = 5;
 const LOCAL_ACCESS_GLOBAL_FAILURE_LIMIT = 30;
 const LOCAL_ACCESS_CLIENT_COOLDOWN_MS = 30_000;
 const LOCAL_ACCESS_GLOBAL_COOLDOWN_MS = 60_000;
-let localAccessMode = "open";
+let localAccessMode = process.env.NODE_ENV === "test" && process.env.PENECHO_TEST_OPEN_ACCESS === "1" ? "open" : "undecided";
 let localAccessPinSalt = null;
 let localAccessPinHash = null;
 let localAccessRevision = 0;

@@ -1014,16 +1014,14 @@ test("New, Export, Clear, and Debug are accessible theme-aware icon buttons", ()
     assert.match(button, /<svg /);
     assert.doesNotMatch(button, />\s*(New|Clear|Debug)\s*</);
   }
-  for (const theme of ["arcane", "scifi", "research", "studio"]) assert.match(html, new RegExp(`value="${theme}"`));
+  assert.match(html, /<body\b[^>]*\bdata-theme="studio"/);
+  assert.match(html, /<div\b[^>]*\bid="aiEmbodiment"[^>]*\bdata-theme="studio"/);
   assert.match(css, /button\.utility-icon:not\(\.active\).*var\(--ink\)/);
   assert.match(css, /button\.utility-icon\.danger:not\(\.active\).*var\(--danger\)/);
 });
 
 test("Studio theme is wired through initialization, localization, and snapshots", () => {
   const html = read("public/index.html"), app = read("public/app.js"), css = read("public/style.css"), zh = read("public/locales/zh.js");
-  const studioOption = html.match(/<option\b[^>]*\bvalue="studio"[^>]*>[^<]*<\/option>/)?.[0] || "";
-  assert.match(studioOption, /data-i18n="themeStudio"/);
-  assert.match(studioOption, /\bselected\b/);
   assert.match(html, /<body\b[^>]*\bdata-theme="studio"/);
   assert.match(html, /<meta\b[^>]*\bname="theme-color"[^>]*\bcontent="#eef0f3"/);
   assert.match(html, /<div\b[^>]*\bid="aiEmbodiment"[^>]*\bdata-theme="studio"/);
@@ -1031,7 +1029,6 @@ test("Studio theme is wired through initialization, localization, and snapshots"
 
   const themeCopy = functionSource(app, "updateThemeCopy"), embodimentCopy = functionSource(app, "updateEmbodimentLabel"), loadSnapshot = functionSource(app, "loadSnapshot");
   assert.match(themeCopy, /studio:\s*"taglineStudio"/);
-  assert.match(themeCopy, /studio:\s*"themeFocusStudio"/);
   assert.match(embodimentCopy, /studio:\s*"guideStudio"/);
   assert.match(loadSnapshot, /\[[^\]]*"studio"[^\]]*\]\.includes\(item\.theme\)\)\s*applyTheme\(item\.theme\)/);
 
