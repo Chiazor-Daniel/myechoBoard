@@ -2074,7 +2074,7 @@ test("API mode uses one configured key without probes or fallback credentials", 
   const server=fs.readFileSync(path.join(ROOT,"src","server","main.js"),"utf8"),cli=fs.readFileSync(path.join(ROOT,"src","cli","main.js"),"utf8"),configure=fs.readFileSync(path.join(ROOT,"src","cli","configure-ui.js"),"utf8");
   for(const source of [server,cli,configure])assert.doesNotMatch(source,/OPENAI_PRO_API_KEY/);
   assert.doesNotMatch(server,/api-health|api-selection|api-runtime-failure|refreshApiConfig|testApiKey|HEALTH_INTERVAL|HEALTH_TIMEOUT/);
-  assert.match(server,/providerRequest\(API_KEY,MODEL,text,atlasImage,effort,literalTypeset,animationEnabled,pluginsEnabled\)/);
+  assert.match(server,/providerRequest\(API_KEY,MODEL,text,atlasImage,effort,literalTypeset,animationEnabled,pluginsEnabled[^)]*\)/);
 });
 
 test("client and server contain no aggregate draft rejection budget", () => {

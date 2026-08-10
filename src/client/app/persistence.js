@@ -188,7 +188,7 @@
   async function snapshotApiResponse(response) {
     let body = null;
     try { body = await response.json(); } catch {}
-    if (!response.ok) throw Error(body?.error || `PenEcho server returned HTTP ${response.status}`);
+    if (!response.ok) throw Error(body?.error || `myechoBoard server returned HTTP ${response.status}`);
     return body;
   }
   async function serverSnapshotItems() {

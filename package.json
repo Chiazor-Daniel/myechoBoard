@@ -2,7 +2,7 @@
   "name": "penecho",
   "version": "0.8.1",
   "description": "Think with AI on a shared canvas for handwriting, equations, and diagrams",
-  "productName": "PenEcho",
+  "productName": "myechoBoard",
   "main": "desktop/main.js",
   "license": "AGPL-3.0-only",
   "keywords": [
@@ -55,11 +55,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/penecho/penecho.git"
+    "url": "git+https://github.com/Chiazor-Daniel/myechoBoard.git"
   },
-  "homepage": "https://github.com/penecho/penecho#readme",
+  "homepage": "https://github.com/Chiazor-Daniel/myechoBoard#readme",
   "bugs": {
-    "url": "https://github.com/penecho/penecho/issues"
+    "url": "https://github.com/Chiazor-Daniel/myechoBoard/issues"
   },
   "scripts": {
     "start": "node cli.js",
@@ -90,6 +90,7 @@
     "sharp": "^0.34.5"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "png2icons": "2.0.1"
   }
 }

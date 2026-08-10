@@ -98,9 +98,7 @@
     settingsButton = document.querySelector("#settingsBtn"),
     settingsCloseButton = document.querySelector("#settingsClose"),
     settingsAutoToggle = document.querySelector("#settingsAutoToggle"),
-    summonToggle = document.querySelector("#summonToggle"),
-    settingsTourButton = document.querySelector("#settingsTourBtn"),
-    settingsChangelogButton = document.querySelector("#settingsChangelogBtn");
+    summonToggle = document.querySelector("#summonToggle");
   const ZH = window.PENECHO_LOCALES?.zh || {};
   const DRAW = window.PENECHO_DRAW;
   const SELECT = window.PENECHO_SELECTION;
@@ -175,7 +173,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
   const PLUGIN_TEMPLATE_STYLES = Object.freeze({ simple:"" });
   const I18N = {
     en: {
-      title: "PenEcho | Handwritten AI Canvas",
+      title: "myechoBoard | Handwritten AI Canvas",
       tagline: "Write across twenty thousand squares and summon knowledge",
       taglineArcane: "Interdisciplinary intuition, creative synthesis, and exploratory explanation",
       taglineScifi: "Engineering, programming, system design, and future-technology analysis",
@@ -297,7 +295,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       plot: "Plot",
       tip: "Pan: middle-mouse drag, Hand tool, or one finger · Zoom: wheel or pinch",
       tourReplay: "Feature tour",
-      tourDialog: "PenEcho feature tour",
+      tourDialog: "myechoBoard feature tour",
       tourBadge: "Quick tour",
       tourBadgeNew: "What's new",
       tourProgress: "Tour progress",
@@ -330,12 +328,12 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       tourStatusBody: "This status indicator reports when AI is observing, writing, finished, delayed, or needs confirmation. When a multi-part draft is ready, nearby controls let you accept or discard the complete response.",
       tourCanvasTitle: "Navigate the large canvas",
       tourCanvasBody: "Write with a mouse or stylus. Pan with one finger, the middle mouse button, or Alt-drag. Zoom with a wheel or trackpad, and pinch with two fingers. Your pointer position and zoom level are shown below the canvas.",
-      changelogDialog: "PenEcho release notes",
+      changelogDialog: "myechoBoard release notes",
       changelogClose: "Close release notes",
       changelogBadge: "What's new",
       changelogTitle: "Live public data and more expressive SVG visuals",
       changelogIntro: "Version 0.8.1 gives General HTML widgets reliable public-data access and makes SVG the default for animation and complex graphics.",
-      changelogVisualPlugins: "When browser CORS blocks a public HTTPS API, RSS feed, or image, General HTML widgets can fall back to PenEcho's local read-only bridge for live, refreshable content without exposing credentials.",
+      changelogVisualPlugins: "When browser CORS blocks a public HTTPS API, RSS feed, or image, General HTML widgets can fall back to myechoBoard's local read-only bridge for live, refreshable content without exposing credentials.",
       changelogCanvasWorkflow: "Animations and complex custom visuals now default to responsive SVG, enabling richer motion, overlays, and scalable graphics while keeping model output compact and token-efficient. Legacy declarative animations no longer load, while older canvases still open without errors.",
       changelogEarlierTitle: "Earlier highlights",
       changelogImagesSummary: "0.8.0 added professional diagrams with editable source, direct widget refinement, server-backed canvas storage, and richer clipboard workflows.",
@@ -373,7 +371,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       summonTip7: "Tip: Real Photo Search places sourced web photos directly on the canvas.",
       summonTip8: "Tip: use Hand to move and freely resize images, animations, and AI widgets.",
       summonTip9: "Tip: remote images remain included when you save the canvas or export a PNG.",
-      summonTip10: "Tip: save a canvas to the PenEcho server so other authorized devices can open it.",
+      summonTip10: "Tip: save a canvas to the myechoBoard server so other authorized devices can open it.",
       summonTip11: "Tip: pause a few seconds after writing and AI replies on its own; auto mode can be toggled in Settings.",
       summonTip12: "Tip: click the AI orb on the canvas to manually pick Answer, Hint, Continue, Explain, or Plot.",
       summonTip13: "Tip: circle content with the lasso and AI will work only on that selection.",
@@ -384,16 +382,16 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       summonTip18: "Tip: History can update the current snapshot or save a separate new copy.",
       summonTip19: "Tip: zoom with the wheel, pan with the middle mouse button—the canvas spans twenty thousand squares.",
       summonTip20: "Tip: AI ink color lives in the toolbar; AI font lives in this Settings panel.",
-      debugTitle: "PenEcho debug",
+      debugTitle: "myechoBoard debug",
       openLocalLog: "Open local server log",
       history: "Canvas history",
       historyTitle: "Canvas history",
       historyDescription: "Stores confirmed canvas content, including restorable animation scenes. Unconfirmed AI drafts are excluded.",
       saveLocation: "Save location",
       storageThisDevice: "This device",
-      storagePenEchoServer: "PenEcho server",
+      storagePenEchoServer: "myechoBoard server",
       storageThisDeviceDescription: "Saved only in this browser on this device. Other devices cannot see it.",
-      storagePenEchoServerDescription: "Saved on the computer running PenEcho. Anyone using this PenEcho service can see it after passing its access check.",
+      storagePenEchoServerDescription: "Saved on the computer running myechoBoard. Anyone using this myechoBoard service can see it after passing its access check.",
       closeHistory: "Close history",
       newCanvas: "New",
       saveCanvas: "Save canvas",
@@ -416,7 +414,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       loadSnapshot: "Load",
       deleteSnapshot: "Delete",
       emptyDeviceHistory: "No canvases saved on this device yet",
-      emptyServerHistory: "No canvases saved on this PenEcho server yet",
+      emptyServerHistory: "No canvases saved on this myechoBoard server yet",
       emptyCanvas: "The canvas is empty",
       snapshotSaved: "Canvas snapshot saved",
       snapshotOverwritten: "Current snapshot overwritten",
@@ -429,7 +427,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       snapshotTiles: "canvas tiles",
       snapshotImages: "images",
       deleteSnapshotConfirmDevice: "Delete this snapshot from this device?",
-      deleteSnapshotConfirmServer: "Delete this shared snapshot from the PenEcho server?",
+      deleteSnapshotConfirmServer: "Delete this shared snapshot from the myechoBoard server?",
       footerTip: "AI drafts: move the whole group or adjust, accept, and discard items independently",
       ready: "Ready",
       aiBusy: "AI is working. Please wait.",
@@ -479,7 +477,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       comingSoon: "Coming soon",
       refreshPlugins: "Refresh local plugins",
       serverPluginsComingTitle: "Server plugin marketplace is coming",
-      serverPluginsComingDescription: "Published plugins, free or points-priced downloads, server selection, trust details, and updates will appear here after the PenEcho website launches.",
+      serverPluginsComingDescription: "Published plugins, free or points-priced downloads, server selection, trust details, and updates will appear here after the myechoBoard website launches.",
       pluginBuiltIn: "Built in",
       pluginLocal: "Local Markdown",
       pluginPersonalSection: "Your plugins",
@@ -777,7 +775,6 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     { id: "core-effort-v1", targets: ["#aiEffortButton"], titleKey: "tourEffortTitle", bodyKey: "tourEffortBody", placement: "bottom", radius: 8 },
     { id: "plugins-v3", targets: ["#pluginButton"], titleKey: "tourPluginsTitle", bodyKey: "tourPluginsBody", placement: "bottom", radius: 8 },
     { id: "hand-v1", targets: ["#handToolBtn"], titleKey: "tourHandTitle", bodyKey: "tourHandBody", placement: "bottom", radius: 7 },
-    { id: "studio-theme-v1", targets: ["#theme"], titleKey: "tourStudioThemeTitle", bodyKey: "tourStudioThemeBody", placement: "bottom", radius: 8 },
     { id: "core-lasso-v1", targets: ["#lassoToolBtn"], titleKey: "tourLassoTitle", bodyKey: "tourLassoBody", placement: "bottom", radius: 7 },
     { id: "core-text-v1", targets: ["#textToolBtn"], titleKey: "tourTextTitle", bodyKey: "tourTextBody", placement: "bottom", radius: 7 },
     { id: "core-image-v1", targets: ["#imagePickerBtn"], titleKey: "tourImageTitle", bodyKey: "tourImageBody", placement: "bottom", radius: 7 },
@@ -2237,7 +2234,6 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     document.querySelectorAll("[data-i18n-aria]").forEach((node) => node.setAttribute("aria-label", t(node.dataset.i18nAria)));
     document.querySelectorAll("[data-i18n-title]").forEach((node) => node.setAttribute("title", t(node.dataset.i18nTitle)));
     document.querySelectorAll("[data-i18n-placeholder]").forEach((node) => node.setAttribute("placeholder", t(node.dataset.i18nPlaceholder)));
-    document.querySelectorAll("[data-language]").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.language === state.language)));
     updateAutoControl();
     updateEffortControl();
     updatePluginControl();
@@ -2258,10 +2254,8 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
   }
   function updateThemeCopy() {
     const key = { arcane: "taglineArcane", scifi: "taglineScifi", research: "taglineResearch", studio: "taglineStudio" }[state.theme];
-    document.querySelector("[data-i18n=tagline]").textContent = t(key);
-    const focus = t({ arcane: "themeFocusArcane", scifi: "themeFocusScifi", research: "themeFocusResearch", studio: "themeFocusStudio" }[state.theme]);
-    document.querySelector("#theme").setAttribute("title", focus);
-    document.querySelector("#theme").setAttribute("aria-description", focus);
+    const tagline = document.querySelector("[data-i18n=tagline]");
+    if (tagline) tagline.textContent = t(key);
   }
   function updateEmbodimentLabel() {
     const label = t({ arcane: "guideArcane", scifi: "guideScifi", research: "guideResearch", studio: "guideStudio" }[state.theme]);
@@ -2295,7 +2289,6 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     state.theme = theme;
     document.body.dataset.theme = theme;
     embodiment.dataset.theme = theme;
-    document.querySelector("#theme").value = theme;
     localStorage.setItem("penecho-theme", theme);
     if (theme === "research") state.gridVisible = localStorage.getItem("penecho-research-grid") === "true";
     else state.gridVisible = (localStorage.getItem("penecho-grid") ?? localStorage.getItem("ghostboard-grid")) !== "false";

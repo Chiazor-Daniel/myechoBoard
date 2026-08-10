@@ -26,7 +26,7 @@ const REQUIRED_ASSETS = [
   "public/index.html", "public/access.html", "public/access.css", "public/access.js", "public/app.js", "public/draw.js", "public/selection.js", "public/tour.js", "public/style.css",
 ];
 
-const PROVIDER_OPTIONS = "api, kimi-cli, codex-cli, or claude-cli";
+const PROVIDER_OPTIONS = "api, ollama, kimi-cli, codex-cli, or claude-cli";
 const KIMI_INSTALL_GUIDANCE = "Kimi Code CLI is not available. Install it yourself, then restart PenEcho:\n  macOS/Linux: curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash\n  Windows PowerShell: irm https://code.kimi.com/kimi-code/install.ps1 | iex\n  Verify: kimi --version\n  Authenticate: kimi login\n  Official guide: https://github.com/MoonshotAI/kimi-code";
 const CLI_PREFLIGHT_TIMEOUT_MS = 30000;
 
@@ -53,16 +53,19 @@ function parseArgs(argv = []) {
       if (result.command !== "start") throw new Error("Only one command may be specified.");
       result.command = argument;
     } else if (argument === "--api") {
-      if (result.provider && result.provider !== "api") throw new Error("--api, --kimi, --codex, and --claude cannot be used together.");
+      if (result.provider && result.provider !== "api") throw new Error("--api, --ollama, --kimi, --codex, and --claude cannot be used together.");
       result.provider = "api";
+    } else if (argument === "--ollama") {
+      if (result.provider && result.provider !== "ollama") throw new Error("--api, --ollama, --kimi, --codex, and --claude cannot be used together.");
+      result.provider = "ollama";
     } else if (argument === "--kimi") {
-      if (result.provider && result.provider !== "kimi-cli") throw new Error("--api, --kimi, --codex, and --claude cannot be used together.");
+      if (result.provider && result.provider !== "kimi-cli") throw new Error("--api, --ollama, --kimi, --codex, and --claude cannot be used together.");
       result.provider = "kimi-cli";
     } else if (argument === "--codex") {
-      if (result.provider && result.provider !== "codex-cli") throw new Error("--api, --kimi, --codex, and --claude cannot be used together.");
+      if (result.provider && result.provider !== "codex-cli") throw new Error("--api, --ollama, --kimi, --codex, and --claude cannot be used together.");
       result.provider = "codex-cli";
     } else if (argument === "--claude") {
-      if (result.provider && result.provider !== "claude-cli") throw new Error("--api, --kimi, --codex, and --claude cannot be used together.");
+      if (result.provider && result.provider !== "claude-cli") throw new Error("--api, --ollama, --kimi, --codex, and --claude cannot be used together.");
       result.provider = "claude-cli";
     } else if (argument === "--port") {
       if (index + 1 >= argv.length) throw new Error("--port requires a value.");
@@ -122,6 +125,7 @@ function normalizeProvider(value) {
   const provider = String(value || "").trim().toLowerCase();
   if (!provider) return null;
   if (provider === "api") return "api";
+  if (provider === "ollama" || provider === "ollama-api") return "ollama";
   if (provider === "kimi" || provider === "kimi-cli") return "kimi-cli";
   if (provider === "codex" || provider === "codex-cli") return "codex-cli";
   if (provider === "claude" || provider === "claude-cli") return "claude-cli";
@@ -169,6 +173,14 @@ function resolveConfiguration(args, options = {}) {
   };
 }
 
+function firstNonEmpty(...values) {
+  for (const value of values) {
+    const text = String(value || "").trim();
+    if (text) return text;
+  }
+  return "";
+}
+
 function isPlaceholder(value) {
   return /^(?:your[_ -]|replace[_ -]|changeme|api[_ -]?key|sk-\.{3})/i.test(String(value || "").trim());
 }
@@ -190,16 +202,34 @@ function configuredTimeoutSeconds(env) {
   return value;
 }
 
+function apiUrlIsLocal(apiUrl) {
+  try {
+    const url = new URL(apiUrl);
+    return ["localhost", "127.0.0.1", "[::1]", "::1"].includes(url.hostname.toLowerCase());
+  } catch { return false; }
+}
+
 function apiConfigurationIssues(env) {
-  const issues = [], key = apiEnvValue(env, "KEY"), model = apiEnvValue(env, "MODEL"), apiUrl = apiEnvValue(env, "URL"), format = apiEnvValue(env, "FORMAT");
-  if (!key || isPlaceholder(key)) issues.push("AI_API_KEY");
-  if (!model || isPlaceholder(model)) issues.push("AI_API_MODEL");
-  if (!apiUrl || isPlaceholder(apiUrl)) issues.push("AI_API_URL");
+  const isOllama = String(env.AI_PROVIDER || "").trim().toLowerCase() === "ollama";
+  const model = isOllama
+    ? firstNonEmpty(env.OLLAMA_MODEL, env.AI_API_MODEL, env.OPENAI_MODEL)
+    : apiEnvValue(env, "MODEL");
+  const apiUrl = isOllama
+    ? firstNonEmpty(env.OLLAMA_HOST, env.AI_API_URL, env.OPENAI_API_URL)
+    : apiEnvValue(env, "URL");
+  const key = isOllama
+    ? firstNonEmpty(env.OLLAMA_API_KEY, env.AI_API_KEY, env.OPENAI_API_KEY)
+    : apiEnvValue(env, "KEY");
+  const format = isOllama ? "openai" : apiEnvValue(env, "FORMAT");
+  const issues = [];
+  if ((!key || isPlaceholder(key)) && (!isOllama || !apiUrlIsLocal(apiUrl))) issues.push(isOllama ? "OLLAMA_API_KEY" : "AI_API_KEY");
+  if (!model || isPlaceholder(model)) issues.push(isOllama ? "OLLAMA_MODEL" : "AI_API_MODEL");
+  if (!apiUrl || isPlaceholder(apiUrl)) issues.push(isOllama ? "OLLAMA_HOST" : "AI_API_URL");
   else {
     try {
       const parsed = new URL(apiUrl);
-      if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password) issues.push("AI_API_URL");
-    } catch { issues.push("AI_API_URL"); }
+      if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password) issues.push(isOllama ? "OLLAMA_HOST" : "AI_API_URL");
+    } catch { issues.push(isOllama ? "OLLAMA_HOST" : "AI_API_URL"); }
   }
   if (format && !["openai", "anthropic"].includes(format.toLowerCase())) issues.push("AI_API_FORMAT");
   if (env.PENECHO_AI_IMAGE_FORMAT && !["webp", "png"].includes(String(env.PENECHO_AI_IMAGE_FORMAT).trim().toLowerCase())) issues.push("PENECHO_AI_IMAGE_FORMAT");
@@ -215,19 +245,26 @@ function safeApiDiagnostic(value, key) {
 async function testApiConnection(env, options = {}) {
   const issues = apiConfigurationIssues(env);
   if (issues.length) throw new Error(`API configuration is incomplete: ${issues.join(", ")}`);
-  const apiUrl = apiEnvValue(env, "URL"), format = apiEnvValue(env, "FORMAT").toLowerCase(), model = apiEnvValue(env, "MODEL"), key = apiEnvValue(env, "KEY"),
-    api = resolveApiConfig(apiUrl, format || undefined);
+  const isOllama = String(env.AI_PROVIDER || "").trim().toLowerCase() === "ollama";
+  const apiUrl = isOllama
+    ? (env.OLLAMA_HOST || env.AI_API_URL || env.OPENAI_API_URL || "http://localhost:11434").trim()
+    : apiEnvValue(env, "URL"),
+    format = String(isOllama ? "openai" : apiEnvValue(env, "FORMAT")).toLowerCase(),
+    model = isOllama ? (env.OLLAMA_MODEL || env.AI_API_MODEL || env.OPENAI_MODEL) : apiEnvValue(env, "MODEL"),
+    key = isOllama ? (env.OLLAMA_API_KEY || env.AI_API_KEY || env.OPENAI_API_KEY || "") : apiEnvValue(env, "KEY"),
+    api = resolveApiConfig(apiUrl, format || undefined, isOllama ? "ollama" : "api");
   if (!api) throw new Error("AI_API_URL and AI_API_FORMAT do not describe a compatible OpenAI or Anthropic endpoint.");
   const effort = normalizedApiEffort(api.format, env.AI_EFFORT);
+  const headers = { "Content-Type":"application/json" };
+  if (key) headers.Authorization = `Bearer ${key}`;
+  const body = { model, messages:[{ role:"user", content:"Reply with OK." }], max_tokens:10 };
+  if (api.format !== "anthropic" && !isOllama) body.reasoning_effort = effort;
   const request = api.format === "anthropic"
     ? {
         headers: { "Content-Type":"application/json", "x-api-key":key, "anthropic-version":"2023-06-01" },
         body: JSON.stringify({ model, max_tokens:10, ...anthropicEffortParameters(effort, false), messages:[{ role:"user", content:"Reply with OK." }] }),
       }
-    : {
-        headers: { "Content-Type":"application/json", Authorization:`Bearer ${key}` },
-        body: JSON.stringify({ model, messages:[{ role:"user", content:"Reply with OK." }], max_tokens:10, reasoning_effort:effort }),
-      };
+    : { headers, body: JSON.stringify(body) };
   const fetchImpl = options.fetchImpl || globalThis.fetch;
   if (typeof fetchImpl !== "function") throw new Error("This Node.js version does not provide fetch().");
   const timeoutMs = options.timeoutMs || configuredTimeoutSeconds(env) * 1000, controller = new AbortController(), timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -436,8 +473,8 @@ function cliTestError(error) {
 
 async function testConfiguredProvider(configuration, options = {}) {
   const provider = configuration.provider;
-  if (!["api", "kimi-cli", "codex-cli", "claude-cli"].includes(provider)) throw new Error(`AI_PROVIDER must be ${PROVIDER_OPTIONS}.`);
-  if (provider === "api") {
+  if (!["api", "ollama", "kimi-cli", "codex-cli", "claude-cli"].includes(provider)) throw new Error(`AI_PROVIDER must be ${PROVIDER_OPTIONS}.`);
+  if (provider === "api" || provider === "ollama") {
     const timeoutMs = configuredTimeoutSeconds(configuration.env) * 1000;
     const result = await (options.apiTester || testApiConnection)(configuration.env, { fetchImpl:options.fetchImpl, timeoutMs });
     return `${result.format} API responded with HTTP ${result.status}.`;
@@ -490,16 +527,17 @@ async function runDoctor(args, configuration, options = {}) {
   try { report(true, `Unified model timeout is ${configuredTimeoutSeconds(configuration.env)} seconds`); }
   catch (error) { report(false, error.message); }
   const defaultEffort = apiEnvValue(configuration.env, "FORMAT").toLowerCase() === "anthropic" ? "medium (Anthropic API default)" : "max (OpenAI API default)";
-  report(true, `Reasoning effort is ${configuration.env.AI_EFFORT || (configuration.provider === "api" ? defaultEffort : "the CLI default")}`);
+  report(true, `Reasoning effort is ${configuration.env.AI_EFFORT || ((configuration.provider === "api" || configuration.provider === "ollama") ? defaultEffort : "the CLI default")}`);
+  if (configuration.provider === "ollama") report(true, `Model is ${configuration.env.OLLAMA_MODEL || configuration.env.AI_API_MODEL || "the Ollama default"}`);
   if (configuration.provider === "kimi-cli") report(true, `Model is ${configuration.env.KIMI_CLI_MODEL || "the Kimi Code CLI configured default"}`);
   if (configuration.provider === "codex-cli") report(true, `Model is ${configuration.env.CODEX_CLI_MODEL || "the Codex CLI default for PenEcho's isolated session"}`);
   if (configuration.provider === "claude-cli") report(true, `Model is ${configuration.env.CLAUDE_CLI_MODEL || "the Claude CLI default"}`);
 
   if (!configuration.provider) {
     report(false, `AI_PROVIDER must be ${PROVIDER_OPTIONS}`);
-  } else if (configuration.provider === "api") {
+  } else if (configuration.provider === "api" || configuration.provider === "ollama") {
     const issues = apiConfigurationIssues(configuration.env);
-    report(issues.length === 0, issues.length ? `API configuration is incomplete: ${issues.join(", ")}. Run \`penecho configure\`.` : "API configuration is ready (no paid request was made)");
+    report(issues.length === 0, issues.length ? `API configuration is incomplete: ${issues.join(", ")}. Run \`penecho configure\`.` : `${configuration.provider === "ollama" ? "Ollama" : "API"} configuration is ready (no paid request was made)`);
   } else if (configuration.provider === "kimi-cli") {
     const kimi = await runKimiPreflight(configuration, { runner:options.runner });
     report(kimi.ok, kimi.ok ? `${kimi.version}; executable is ready (authentication is checked when Kimi handles the first request)` : kimi.error);
@@ -548,7 +586,7 @@ function schedulePostStartUpdate(server, argv, options, output, errorOutput) {
 
 
 function helpText() {
-  return `PenEcho ${PACKAGE_JSON.version}\n\nUsage:\n  penecho [--config FILE] [--port 3888]\n  penecho configure [--config FILE]\n  penecho doctor [--api|--kimi|--codex|--claude] [--config FILE]\n  penecho --kimi [--model MODEL] [--effort LEVEL]\n  penecho --codex [--model MODEL] [--effort LEVEL]\n  penecho --claude [--model MODEL] [--effort LEVEL]\n\nOptions:\n  --config <file>   Use this configuration file instead of ~/.penecho/config.env\n  --api             Use an OpenAI-compatible or Anthropic-compatible API\n  --kimi            Use the authenticated Kimi Code CLI\n  --codex           Use the authenticated Codex CLI\n  --claude          Use the authenticated Claude CLI\n  --model <model>   Override the model for a CLI mode\n  --effort <level>  Override reasoning effort with a known or CLI-supported value\n  --port <port>     Override the configured listening port\n  -h, --help        Show help\n  -v, --version     Show version\n\nRun \`penecho configure\` for the interactive configuration center. Known effort values include none, low, medium, high, xhigh, and max; other strings are passed through.\n\nKimi Code CLI installation (run these yourself):\n  macOS/Linux: curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash\n  Windows PowerShell: irm https://code.kimi.com/kimi-code/install.ps1 | iex\n  Then: kimi --version && kimi login\n  Official guide: https://github.com/MoonshotAI/kimi-code\n\nExamples:\n  penecho configure\n  penecho\n  penecho --config ./team.env\n  penecho --kimi\n  penecho --codex --model gpt-5.6-sol --effort xhigh\n`;
+  return `PenEcho ${PACKAGE_JSON.version}\n\nUsage:\n  penecho [--config FILE] [--port 3888]\n  penecho configure [--config FILE]\n  penecho doctor [--api|--ollama|--kimi|--codex|--claude] [--config FILE]\n  penecho --ollama [--model MODEL]\n  penecho --kimi [--model MODEL] [--effort LEVEL]\n  penecho --codex [--model MODEL] [--effort LEVEL]\n  penecho --claude [--model MODEL] [--effort LEVEL]\n\nOptions:\n  --config <file>   Use this configuration file instead of ~/.penecho/config.env\n  --api             Use an OpenAI-compatible or Anthropic-compatible API\n  --ollama          Use a local Ollama server (OpenAI-compatible endpoint)\n  --kimi            Use the authenticated Kimi Code CLI\n  --codex           Use the authenticated Codex CLI\n  --claude          Use the authenticated Claude CLI\n  --model <model>   Override the model for a CLI mode\n  --effort <level>  Override reasoning effort with a known or CLI-supported value\n  --port <port>     Override the configured listening port\n  -h, --help        Show help\n  -v, --version     Show version\n\nRun \`penecho configure\` for the interactive configuration center. Known effort values include none, low, medium, high, xhigh, and max; other strings are passed through.\n\nKimi Code CLI installation (run these yourself):\n  macOS/Linux: curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash\n  Windows PowerShell: irm https://code.kimi.com/kimi-code/install.ps1 | iex\n  Then: kimi --version && kimi login\n  Official guide: https://github.com/MoonshotAI/kimi-code\n\nExamples:\n  penecho configure\n  penecho\n  penecho --config ./team.env\n  penecho --ollama --model gemma3:4b\n  penecho --kimi\n  penecho --codex --model gpt-5.6-sol --effort xhigh\n`;
 }
 
 async function main(argv = process.argv.slice(2), options = {}) {
@@ -599,13 +637,13 @@ async function main(argv = process.argv.slice(2), options = {}) {
     if (!await configure("")) return 1;
   }
   if (!configuration.provider) {
-    errorOutput.write(`PenEcho has no LLM source. Run \`penecho configure\` and select Kimi CLI, Claude CLI, Codex CLI, or API.\n`);
+    errorOutput.write(`PenEcho has no LLM source. Run \`penecho configure\` and select Kimi CLI, Claude CLI, Codex CLI, API, or Ollama.\n`);
     return 1;
   }
-  if (configuration.provider === "api") {
+  if (configuration.provider === "api" || configuration.provider === "ollama") {
     const issues = apiConfigurationIssues(configuration.env);
     if (issues.length) {
-      errorOutput.write(`PenEcho API configuration is incomplete: ${issues.join(", ")}.\nRun \`penecho configure\` to correct it.\n`);
+      errorOutput.write(`PenEcho ${configuration.provider === "ollama" ? "Ollama" : "API"} configuration is incomplete: ${issues.join(", ")}.\nRun \`penecho configure\` to correct it.\n`);
       return 1;
     }
   } else if (configuration.provider === "kimi-cli") {

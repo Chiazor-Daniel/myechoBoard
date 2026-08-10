@@ -725,14 +725,6 @@
     if (event.key === "Escape") hideEffortControl();
     if (event.key === "Escape") hidePluginControl();
   });
-  document.querySelectorAll("[data-language]").forEach((button) => {
-    button.onclick = () => {
-      state.language = button.dataset.language;
-      localStorage.setItem("penecho-language", state.language);
-      applyLanguage();
-    };
-  });
-  document.querySelector("#theme").onchange = (e) => applyTheme(e.target.value);
   document.querySelector("#gridToggle").onclick = () => {
     state.gridVisible = !state.gridVisible;
     localStorage.setItem(state.theme === "research" ? "penecho-research-grid" : "penecho-grid", String(state.gridVisible));
@@ -940,14 +932,6 @@
   settingsPanel.addEventListener("pointerdown", (event) => event.stopPropagation());
   settingsAutoToggle.addEventListener("click", () => setAutoEnabled(!state.auto));
   summonToggle.addEventListener("click", () => setSummonEnabled(!state.summonEnabled));
-  settingsTourButton.addEventListener("click", () => {
-    closeSettings(false);
-    replayFeatureTour();
-  });
-  settingsChangelogButton.addEventListener("click", () => {
-    closeSettings(false);
-    maybeShowChangelog(true);
-  });
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && settings.open) {
       event.preventDefault();
@@ -1035,5 +1019,4 @@
   refreshSnapshots().catch(() => {});
   fit();
   setNavigating(true);
-  requestAnimationFrame(() => requestAnimationFrame(maybeStartOnboarding));
 })();

@@ -8,6 +8,7 @@ const PROVIDERS = {
   claude: "claude-cli",
   codex: "codex-cli",
   api: "api",
+  ollama: "ollama",
 };
 
 function cleanText(value) {
@@ -148,7 +149,7 @@ async function chooseModel(ui, provider, configuration) {
 }
 
 async function chooseEffort(ui, provider, current, format = "") {
-  const isKimi = provider === PROVIDERS.kimi, isCodex = provider === PROVIDERS.codex, isClaude = provider === PROVIDERS.claude,
+  const isKimi = provider === PROVIDERS.kimi, isCodex = provider === PROVIDERS.codex, isClaude = provider === PROVIDERS.claude, isOllama = provider === PROVIDERS.ollama,
     defaultValue = current || (format === "anthropic" ? "medium" : isKimi ? "high" : isClaude ? "max" : "xhigh");
   const levels = isCodex
     ? [["low","Low"],["medium","Medium"],["high","High"],["xhigh","Extra high (maximum for Codex)"]]
@@ -158,7 +159,9 @@ async function chooseEffort(ui, provider, current, format = "") {
       ? [["none","None (thinking disabled)"],["low","Low"],["medium","Medium"],["high","High"],["max","Max"]]
       : format === "anthropic"
         ? [["none","None (thinking disabled)"],["low","Low"],["medium","Medium (recommended)"],["high","High"],["max","Max"]]
-        : [["low","Low"],["medium","Medium"],["high","High"],["xhigh","Extra high (OpenAI-compatible maximum)"],["max","Max"]];
+        : isOllama
+          ? [["none","None (recommended for Ollama; reasoning_effort is omitted)"],["low","Low"],["medium","Medium"],["high","High"],["max","Max"]]
+          : [["low","Low"],["medium","Medium"],["high","High"],["xhigh","Extra high (OpenAI-compatible maximum)"],["max","Max"]];
   const choices = [
     ...((isKimi || isCodex || isClaude) ? [{ name:`Use the ${isKimi ? "Kimi" : isCodex ? "Codex" : "Claude"} CLI default`, value:"", description:"Do not pass an explicit effort." }] : []),
     ...levels.map(([value, name]) => ({ name, value })),
@@ -261,6 +264,28 @@ async function configureApi(ui, configuration, options) {
   }, options);
 }
 
+async function configureOllama(ui, configuration, options) {
+  ui.header("Ollama", "Main menu  ›  LLM source  ›  Ollama",
+    "Use a local Ollama server. Ollama exposes an OpenAI-compatible endpoint at /v1. Choose a multimodal model such as gemma3 or llava.");
+  const env = configuration.env,
+    defaultUrl = cleanText(env.OLLAMA_HOST) || cleanText(env.AI_API_URL) || "http://localhost:11434",
+    defaultModel = cleanText(env.OLLAMA_MODEL) || cleanText(env.AI_API_MODEL) || "gemma3:4b",
+    ollamaUrl = cleanText(await ui.input("Ollama base URL", defaultUrl, value => {
+      try {
+        const url = new URL(cleanText(value));
+        return ["http:","https:"].includes(url.protocol) && url.hostname && !url.username && !url.password ? true : "Enter a valid HTTP(S) URL without embedded credentials.";
+      } catch { return "Enter a valid HTTP(S) URL."; }
+    })),
+    model = cleanText(await ui.input("Model", defaultModel, textValidator("Model"))),
+    effort = await chooseEffort(ui, PROVIDERS.ollama, cleanText(env.AI_EFFORT) || "none", "openai");
+  return finishProviderConfiguration(ui, configuration, {
+    AI_PROVIDER:PROVIDERS.ollama,
+    OLLAMA_HOST:ollamaUrl,
+    OLLAMA_MODEL:model,
+    AI_EFFORT:effort,
+  }, options);
+}
+
 async function configureSettings(ui, configuration, options) {
   const env = configuration.env;
   ui.header("Settings", "Main menu  ›  Settings",
@@ -317,6 +342,7 @@ async function llmSourceMenu(ui, configuration, options, directProvider = "") {
         { name:"Claude CLI", value:PROVIDERS.claude, description:"Use your authenticated Claude Code installation." },
         { name:"Codex CLI", value:PROVIDERS.codex, description:"Use your authenticated OpenAI Codex CLI installation." },
         { name:"API", value:PROVIDERS.api, description:"Use an OpenAI- or Anthropic-compatible HTTP API." },
+        { name:"Ollama", value:PROVIDERS.ollama, description:"Use a local Ollama server with a multimodal model." },
         { name:"Back", value:"__back__" },
       ], configuration.env.AI_PROVIDER || PROVIDERS.codex);
     }
@@ -325,6 +351,7 @@ async function llmSourceMenu(ui, configuration, options, directProvider = "") {
     else if (requested === PROVIDERS.claude) await configureClaude(ui, configuration, options);
     else if (requested === PROVIDERS.codex) await configureCodex(ui, configuration, options);
     else if (requested === PROVIDERS.api) await configureApi(ui, configuration, options);
+    else if (requested === PROVIDERS.ollama) await configureOllama(ui, configuration, options);
     if (directProvider) return;
     requested = "";
   }
