@@ -10,9 +10,6 @@ npm ci
 echo "==> Building client bundle..."
 npm run build:client
 
-echo "==> Pulling Ollama model..."
-ollama pull kimi-k2.7-code:cloud
-
 echo "==> Creating myechoBoard config..."
 mkdir -p ~/.penecho
 cat > ~/.penecho/config.env <<'EOF'
@@ -27,4 +24,6 @@ AUTO_AI_DELAY_SECONDS=5
 PENECHO_REQUEST_TRACE=false
 EOF
 
+echo ""
 echo "==> Codespace setup complete."
+echo "    Next: open a terminal, run 'ollama login' if needed, then 'ollama pull kimi-k2.7-code:cloud'."
