@@ -1,0 +1,49 @@
+name: Deploy to Google Cloud Run
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Build and push image with Cloud Build
+        run: |
+          gcloud builds submit --tag gcr.io/${{ secrets.GCP_PROJECT_ID }}/myechoboard:${{ github.sha }} --tag gcr.io/${{ secrets.GCP_PROJECT_ID }}/myechoboard:latest
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy myechoboard \
+            --image gcr.io/${{ secrets.GCP_PROJECT_ID }}/myechoboard:latest \
+            --region ${{ secrets.GCP_REGION }} \
+            --platform managed \
+            --allow-unauthenticated \
+            --port 8080 \
+            --set-env-vars AI_PROVIDER=${{ secrets.AI_PROVIDER }} \
+            --set-env-vars OLLAMA_HOST=${{ secrets.OLLAMA_HOST }} \
+            --set-env-vars OLLAMA_MODEL=${{ secrets.OLLAMA_MODEL }} \
+            --set-env-vars OLLAMA_API_KEY=${{ secrets.OLLAMA_API_KEY }} \
+            --set-env-vars AI_API_KEY=${{ secrets.AI_API_KEY }} \
+            --set-env-vars AI_API_URL=${{ secrets.AI_API_URL }} \
+            --set-env-vars AI_API_MODEL=${{ secrets.AI_API_MODEL }} \
+            --set-env-vars AI_API_FORMAT=${{ secrets.AI_API_FORMAT }}
