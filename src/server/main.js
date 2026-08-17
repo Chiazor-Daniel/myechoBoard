@@ -29,6 +29,9 @@ const PRIVATE_PLUGIN_DIRECTORY = process.env.PENECHO_PRIVATE_PLUGIN_DIR
     ? path.join(STATE_DIRECTORY, "plugins", "private")
     : path.join(PLUGIN_DIRECTORY, "private");
 const WIDGET_RENDERER = path.join(PUBLIC, "vendor", "penecho-dom-renderer.js");
+const FRAME_ANCESTORS = process.env.PENECHO_FRAME_ANCESTORS || "'none'";
+let PACKAGE_VERSION = "";
+try { PACKAGE_VERSION = require("../../package.json").version || ""; } catch {}
 const AI_PROVIDER = normalizeAiProvider(process.env.AI_PROVIDER);
 const IS_OLLAMA = AI_PROVIDER === "ollama";
 const IS_API = AI_PROVIDER === "api";
@@ -175,7 +178,14 @@ const LOCAL_ACCESS_CLIENT_FAILURE_LIMIT = 5;
 const LOCAL_ACCESS_GLOBAL_FAILURE_LIMIT = 30;
 const LOCAL_ACCESS_CLIENT_COOLDOWN_MS = 30_000;
 const LOCAL_ACCESS_GLOBAL_COOLDOWN_MS = 60_000;
-let localAccessMode = process.env.NODE_ENV === "test" && process.env.PENECHO_TEST_OPEN_ACCESS === "1" ? "open" : "undecided";
+const requestedLocalAccessMode = String(process.env.PENECHO_LOCAL_ACCESS_MODE || "").trim().toLowerCase();
+let localAccessMode = requestedLocalAccessMode === "open" || requestedLocalAccessMode === "pin" || requestedLocalAccessMode === "undecided"
+  ? requestedLocalAccessMode
+  : process.env.NODE_ENV === "test" && process.env.PENECHO_TEST_OPEN_ACCESS === "1"
+    ? "open"
+    : process.env.NODE_ENV === "test" && process.env.PENECHO_TEST_OPEN_ACCESS === "0"
+      ? "undecided"
+      : "open";
 let localAccessPinSalt = null;
 let localAccessPinHash = null;
 let localAccessRevision = 0;
@@ -1930,6 +1940,18 @@ const server = http.createServer(async (req, res) => {
     }
     return send(res,404,{error:"Not found"});
   }
+  if (req.method === "GET" && url.pathname === "/health") {
+    return send(res, 200, {
+      status:"ok",
+      uptimeSeconds:Math.round(process.uptime()),
+      pid:process.pid,
+      provider:AI_PROVIDER || null,
+      model:MODEL || null,
+      port:PORT,
+      version:PACKAGE_VERSION,
+      timestamp:new Date().toISOString(),
+    });
+  }
   if (req.method === "GET" && url.pathname === "/api/config") return send(res, 200, { autoAiDelayMs: AUTO_AI_DELAY_MS, aiRequestTimeoutMs:AI_REQUEST_TIMEOUT_MS, aiProvider: AI_PROVIDER || "invalid", aiEffort:configuredUiEffort() });
   if (req.method === "GET" && url.pathname === "/api/config.js") {
     const config={autoAiDelayMs:AUTO_AI_DELAY_MS,aiRequestTimeoutMs:AI_REQUEST_TIMEOUT_MS,aiProvider:AI_PROVIDER||"invalid",aiEffort:configuredUiEffort()};
@@ -2084,7 +2106,13 @@ const server = http.createServer(async (req, res) => {
       parentOrigin = requestedParentOrigin === null ? null : exactWidgetParentOrigin(requestedParentOrigin),
       accessSessions = url.searchParams.getAll("access-session");
     if (origins.length > MAX_PLUGIN_CONNECT_ORIGINS || origins.some(origin => !origin) || new Set(origins).size !== origins.length || requestedParentOrigin !== null && !parentOrigin || accessSessions.length > 1 || accessSessions.length === 1 && !matchesAiSessionToken(accessSessions[0])) return send(res, 400, "Invalid widget host origin", "text/plain; charset=utf-8");
-    const file = path.join(PUBLIC, "widget-host.html"), policy = `default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' https:; style-src 'unsafe-inline' https:; connect-src 'self' https:; img-src data: blob: https:; font-src data: https:; media-src data: blob: https:; frame-src 'self' blob:; worker-src blob: https:; object-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'${parentOrigin ? ` ${parentOrigin}` : ""}`;
+    const file = path.join(PUBLIC, "widget-host.html");
+    const widgetFrameAncestors = parentOrigin
+      ? `\x27self\x27 ${parentOrigin}`
+      : FRAME_ANCESTORS === "'none'"
+        ? "\x27self\x27"
+        : `\x27self\x27 ${FRAME_ANCESTORS}`;
+    const policy = `default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' https:; style-src 'unsafe-inline' https:; connect-src 'self' https:; img-src data: blob: https:; font-src data: https:; media-src data: blob: https:; frame-src 'self' blob:; worker-src blob: https:; object-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors ${widgetFrameAncestors}`;
     res.writeHead(200, { "Content-Type":"text/html; charset=utf-8", "Cache-Control":"no-store", "Content-Security-Policy":policy, "Referrer-Policy":"no-referrer", "X-Content-Type-Options":"nosniff", "Cross-Origin-Resource-Policy":"same-origin" });
     if (req.method === "HEAD") return res.end();
     return fs.createReadStream(file).pipe(res);
@@ -2310,7 +2338,7 @@ const server = http.createServer(async (req, res) => {
   if (!file.startsWith(PUBLIC + path.sep) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) return send(res, 404, "Not found", "text/plain");
   const host = requestHost(req),
     loopbackFrameSources = isLoopbackHostname(host?.hostname) ? ` http://localhost:${host.port || "80"} http://127.0.0.1:${host.port || "80"}` : "",
-    headers = { "Content-Type": MIME[path.extname(file)] || "application/octet-stream", "Cache-Control":"no-store", "Content-Security-Policy":`default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'sha256-JLEjeN9e5dGsz5475WyRaoA4eQOdNPxDIeUhclnJDCE=' 'sha256-mQyxHEuwZJqpxCw3SLmc4YOySNKXunyu2Oiz1r3/wAE=' 'sha256-OCf+kv5Asiwp++8PIevKBYSgnNLNUZvxAp4a7wMLuKA='; img-src 'self' blob: data: https://github.com https://*.githubusercontent.com; connect-src 'self'; frame-src 'self'${loopbackFrameSources}; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'`, "Referrer-Policy":"no-referrer", "X-Content-Type-Options":"nosniff", "Cross-Origin-Resource-Policy":"same-origin" };
+    headers = { "Content-Type": MIME[path.extname(file)] || "application/octet-stream", "Cache-Control":"no-store", "Content-Security-Policy":`default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'sha256-JLEjeN9e5dGsz5475WyRaoA4eQOdNPxDIeUhclnJDCE=' 'sha256-mQyxHEuwZJqpxCw3SLmc4YOySNKXunyu2Oiz1r3/wAE=' 'sha256-OCf+kv5Asiwp++8PIevKBYSgnNLNUZvxAp4a7wMLuKA='; img-src 'self' blob: data: https://github.com https://*.githubusercontent.com; connect-src 'self'; frame-src 'self'${loopbackFrameSources}; object-src 'none'; base-uri 'none'; frame-ancestors ${FRAME_ANCESTORS}; form-action 'none'`, "Referrer-Policy":"no-referrer", "X-Content-Type-Options":"nosniff", "Cross-Origin-Resource-Policy":"same-origin" };
   if (requested === "/index.html" && trustedLocalPage && (localAccessMode === "open" || hasAiSession(req))) headers["Set-Cookie"] = aiSessionCookie(req);
   res.writeHead(200, headers);
   if (req.method === "HEAD") return res.end();

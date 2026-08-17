@@ -1,0 +1,45 @@
+# Local test stack: myechoBoard app + Ollama with host .ollama data mounted.
+# This is ONLY for local testing. In production/Dokploy use docker-compose.dokploy.yml
+# with a persistent named volume.
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama-test
+    restart: "no"
+    volumes:
+      # Adjust this path to your host Ollama models directory.
+      - /usr/share/ollama/.ollama:/root/.ollama:ro
+    networks:
+      - echoboard-test-net
+    healthcheck:
+      test: ["CMD", "sh", "-c", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  echoboard:
+    image: buzz3r/echoboard:latest
+    container_name: echoboard-test
+    restart: "no"
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      AI_PROVIDER: ollama
+      OLLAMA_HOST: http://ollama-test:11434
+      OLLAMA_MODEL: gemma3:4b
+      PENECHO_FRAME_ANCESTORS: "http://localhost:9000 https://myecho.edustartech.com/"
+      PENECHO_LOCAL_ACCESS_MODE: open
+      HOST: 0.0.0.0
+      PORT: 8080
+    networks:
+      - echoboard-test-net
+    ports:
+      - "8080:8080"
+
+networks:
+  echoboard-test-net:
+    name: echoboard-test-net
+    driver: bridge

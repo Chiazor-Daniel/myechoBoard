@@ -1,0 +1,62 @@
+# Dokploy / Docker Compose stack for myechoBoard + Ollama (split deployment).
+#
+# This keeps the myechoBoard app image small and runs Ollama in its own
+# official container. Ollama authentication happens inside the Ollama
+# container via the mounted .ollama volume.
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    volumes:
+      # Mount your host's authenticated Ollama directory.
+      # On the Dokploy host, copy your ~/.ollama folder to this path first,
+      # or use a named volume that you populate with id_ed25519 + models.
+      - ollama-data:/root/.ollama
+    networks:
+      - echoboard-net
+    # No ports exposed to the outside world by default.
+    # myechoBoard reaches Ollama over the internal Docker network.
+    # Uncomment the next line if you also want direct external Ollama access.
+    # ports:
+    #   - "11434:11434"
+    healthcheck:
+      test: ["CMD", "sh", "-c", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  echoboard:
+    image: buzz3r/echoboard:latest
+    container_name: echoboard
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      AI_PROVIDER: ollama
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_MODEL: kimi-k2.7-code:cloud
+      # Add the origin of the parent app that will embed myechoBoard in an iframe.
+      # Multiple origins can be space-separated, e.g.:
+      # PENECHO_FRAME_ANCESTORS: "https://myecho.edustartech.com/ https://app.yoursite.com"
+      PENECHO_FRAME_ANCESTORS: "https://myecho.edustartech.com/"
+      # Access mode: open means no PIN screen on LAN/trusted hosts.
+      PENECHO_LOCAL_ACCESS_MODE: open
+      HOST: 0.0.0.0
+      PORT: 8080
+    networks:
+      - echoboard-net
+    ports:
+      - "8080:8080"
+
+networks:
+  echoboard-net:
+    name: echoboard-net
+    driver: bridge
+
+volumes:
+  ollama-data:
+    name: ollama-data

@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1
 
-# Multi-stage build for a small, self-contained myechoBoard image.
-# Deploy to Google Cloud Run, Cloud Engine, or any container host.
+# Multi-stage build for a small, self-contained myechoBoard app image.
+# Designed to pair with a separate Ollama service (split deployment).
+# Deploy to Dokploy, Google Cloud Run, Cloud Engine, or any container host.
 
 FROM node:22-slim AS builder
 
@@ -26,7 +27,7 @@ ENV NODE_ENV=production
 
 # sharp needs libvips runtime libraries in Debian slim.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libvips42 \
+    && apt-get install -y --no-install-recommends libvips42 ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy only what the production server needs.
@@ -46,10 +47,13 @@ COPY --from=builder /app/CONTRIBUTOR-LICENSE-AGREEMENT.md ./
 COPY --from=builder /app/TRADEMARKS.md ./
 COPY --from=builder /app/COMMERCIAL-LICENSE.md ./
 
-# Cloud Run default; override with --env PORT=... or docker run -e PORT=3888
+# Dokploy / Cloud Run default; override with --env PORT=... or docker run -e PORT=3888
 ENV HOST=0.0.0.0
 ENV PORT=8080
 
 EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD node -e "fetch('http://localhost:' + (process.env.PORT || 8080) + '/health').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"
 
 CMD ["node", "server.js"]
