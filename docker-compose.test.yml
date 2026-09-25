@@ -1,28 +1,17 @@
-# Local test stack: myechoBoard + Ollama using the host's authenticated Ollama session.
-# On this local machine, the host Ollama service stores data under /usr/share/ollama/.ollama.
-# On your Dokploy host, change the bind mount to ~/.ollama.
+# Local test stack: single self-contained myechoBoard container.
+# The image bundles the Ollama daemon and an authenticated Ollama Cloud
+# session, so nothing on the host is required.
 
 services:
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ollama-test
-    restart: "no"
-    volumes:
-      - /usr/share/ollama/.ollama:/root/.ollama:ro
-    networks:
-      - echoboard-test-net
-
   echoboard:
     image: buzz3r/echoboard:latest
     container_name: echoboard-test
     restart: "no"
-    depends_on:
-      - ollama
     environment:
       HOST: 0.0.0.0
       PORT: 8080
       AI_PROVIDER: ollama
-      OLLAMA_HOST: http://ollama-test:11434
+      OLLAMA_HOST: http://localhost:11434
       OLLAMA_MODEL: gemma4:31b-cloud
       PENECHO_AI_IMAGE_FORMAT: png
       AI_TIMEOUT_SECONDS: 300
@@ -30,12 +19,5 @@ services:
       PENECHO_REQUEST_TRACE: false
       PENECHO_FRAME_ANCESTORS: "http://localhost:9000 https://myecho.edustartech.com/"
       PENECHO_LOCAL_ACCESS_MODE: open
-    networks:
-      - echoboard-test-net
     ports:
       - "8080:8080"
-
-networks:
-  echoboard-test-net:
-    name: echoboard-test-net
-    driver: bridge

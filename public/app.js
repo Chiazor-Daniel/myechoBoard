@@ -2403,6 +2403,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     if (state.radialGesture) return;
     embodiment.classList.remove("menu-open");
     aiOrb.setAttribute("aria-expanded", "false");
+    if (aiRadial.contains(document.activeElement) && typeof document.activeElement.blur === "function") document.activeElement.blur();
     aiRadial.setAttribute("aria-hidden", "true");
     document.querySelectorAll(".radial-action").forEach((button) => {
       button.classList.remove("is-highlighted");
@@ -11374,6 +11375,4 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
   refreshSnapshots().catch(() => {});
   fit();
   setNavigating(true);
-  // Show the one-time feature guide (or its new steps after an update).
-  setTimeout(() => maybeStartOnboarding(), 600);
 })();

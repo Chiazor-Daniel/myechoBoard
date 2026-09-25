@@ -1,37 +1,20 @@
-# Dokploy / Docker Compose stack for myechoBoard + Ollama.
+# Dokploy / Docker Compose stack for myechoBoard.
 #
-# Ollama runs in its own official container and authenticates using the host's
-# existing Ollama session via a bind mount. On the Dokploy host, make sure
-# ~/.ollama contains id_ed25519, id_ed25519.pub, and config.json from your
-# authenticated local machine.
+# Single self-contained service: the image bundles the Ollama daemon and an
+# authenticated Ollama Cloud session, so no separate Ollama container and no
+# host ~/.ollama directory are required. The embedded entrypoint starts
+# `ollama serve` on localhost and registers OLLAMA_MODEL before the app boots.
 
 services:
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ollama
-    restart: unless-stopped
-    volumes:
-      # Mount the host's authenticated Ollama directory.
-      # On the Dokploy host, copy your local ~/.ollama here first.
-      - ~/.ollama:/root/.ollama
-    networks:
-      - echoboard-net
-    # No public port required; echoboard talks over the Docker network.
-    # Uncomment the next line if you want direct external Ollama access.
-    # ports:
-    #   - "11434:11434"
-
   echoboard:
     image: buzz3r/echoboard:latest
     container_name: echoboard
     restart: unless-stopped
-    depends_on:
-      - ollama
     environment:
       HOST: 0.0.0.0
       PORT: 8080
       AI_PROVIDER: ollama
-      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_HOST: http://localhost:11434
       OLLAMA_MODEL: gemma4:31b-cloud
       PENECHO_AI_IMAGE_FORMAT: png
       AI_TIMEOUT_SECONDS: 300
@@ -40,12 +23,5 @@ services:
       # Origins allowed to embed myechoBoard in an iframe.
       PENECHO_FRAME_ANCESTORS: https://myecho.edustartech.com/
       PENECHO_LOCAL_ACCESS_MODE: open
-    networks:
-      - echoboard-net
     ports:
       - "8080:8080"
-
-networks:
-  echoboard-net:
-    name: echoboard-net
-    driver: bridge

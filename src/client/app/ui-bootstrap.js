@@ -1127,6 +1127,4 @@
   refreshSnapshots().catch(() => {});
   fit();
   setNavigating(true);
-  // Show the one-time feature guide (or its new steps after an update).
-  setTimeout(() => maybeStartOnboarding(), 600);
 })();
