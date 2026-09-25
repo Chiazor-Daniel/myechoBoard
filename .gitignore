@@ -24,3 +24,4 @@ docs/assets/penecho-demo.gif
 tools/mobile/android/
 tools/mobile/ios/
 tools/mobile/web/penecho-mark.png
+.playwright-mcp/

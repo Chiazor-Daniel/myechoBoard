@@ -442,6 +442,7 @@ function canonicalSharedCanvas(value) {
   }
   for(const image of images) {
     if(!image||typeof image!=="object"||typeof image.id!=="string"||!/^image-\d+$/.test(image.id)||!validSnapshotDataUrl(image.data,new Set(["image/png","image/jpeg","image/webp","image/gif"]),32*1024*1024))return null;
+    if(image.model!==undefined&&image.model!==null&&(!image.model||typeof image.model!=="object"||!validSnapshotDataUrl(image.model.data,new Set(["model/gltf-binary"]),20*1024*1024)))return null;
     if(![image.x,image.y,image.w,image.h,image.naturalW,image.naturalH].every(Number.isFinite)||image.x<0||image.y<0||image.w<80||image.h<80||image.x+image.w>CANVAS_SIZE||image.y+image.h>CANVAS_SIZE||image.naturalW<1||image.naturalH<1||image.naturalW>2048||image.naturalH>2048||image.naturalW*image.naturalH>16*1024*1024)return null;
   }
   const canonicalTextBoxes=[];
@@ -463,6 +464,7 @@ function canonicalSharedCanvas(value) {
       naturalW:Math.round(image.naturalW),naturalH:Math.round(image.naturalH),
       sourceName:typeof image.sourceName==="string"?image.sourceName.trim().slice(0,160):"",
       data:image.data,
+      ...(image.model?{model:{data:image.model.data}}:{}),
     })),
     tiles:tiles.map(tile=>({k:tile.k,data:tile.data})),
     preview:value.preview,
@@ -2099,6 +2101,16 @@ const server = http.createServer(async (req, res) => {
       res.removeListener("close", abort);
     }
     return;
+  }
+  if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/model-viewer.html") {
+    // The 3D model viewer runs inside same-origin iframes on the board, so it
+    // cannot inherit the page-level frame-ancestors that forbids framing.
+    const file = path.join(PUBLIC, "model-viewer.html"),
+      viewerFrameAncestors = FRAME_ANCESTORS === "'none'" ? "'self'" : `'self' ${FRAME_ANCESTORS}`,
+      policy = `default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' data: blob:; object-src 'none'; base-uri 'none'; frame-ancestors ${viewerFrameAncestors}`;
+    res.writeHead(200, { "Content-Type":"text/html; charset=utf-8", "Cache-Control":"no-store", "Content-Security-Policy":policy, "Referrer-Policy":"no-referrer", "X-Content-Type-Options":"nosniff", "Cross-Origin-Resource-Policy":"same-origin" });
+    if (req.method === "HEAD") return res.end();
+    return fs.createReadStream(file).pipe(res);
   }
   if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/widget-host.html") {
     const origins = url.searchParams.getAll("connect").map(exactHttpsOrigin),

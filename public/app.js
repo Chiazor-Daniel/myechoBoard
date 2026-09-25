@@ -211,7 +211,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       textEmpty: "Enter some text first",
       textMixedModeError: "Mixed formatting was unavailable; plain text was inserted",
       textHelp: "Text formatting help",
-      addImage: "Add image or photo",
+      addImage: "Add image, photo, or PDF",
       copyFromClipboard: "Copy text or image from clipboard",
       clipboardReading: "Reading clipboard...",
       clipboardTextAdded: "Clipboard text added. Move or resize the text box, then confirm.",
@@ -219,6 +219,18 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       clipboardReadFailed: "Could not read the clipboard. Allow clipboard access or use Ctrl/Cmd+V.",
       imageLoading: "Preparing image...",
       imageAdded: "Image added",
+      imageEditMenu: "Resize or edit",
+      selectionShapeLasso: "Lasso selection: draw around the ink",
+      selectionShapeRect: "Rectangle selection: drag a box around the area",
+      pdfLoading: "Preparing PDF pages...",
+      pdfAdded: "PDF pages added. Highlight with ink or lasso a region, then ask the AI.",
+      pdfUnsupported: "This PDF could not be opened",
+      modelLoading: "Preparing 3D model...",
+      modelAdded: "3D model added. Right-click it to open the 3D view.",
+      modelUnsupported: "This 3D model could not be opened",
+      modelView: "Open 3D view",
+      modelUseView: "Use this view",
+      modelClose: "Close",
       imageSelected: "Editing image: drag the top handle to move, use edge handles to resize, or choose a side action",
       imageMerged: "Merged into canvas ink — the eraser now works on it",
       imageEditBarLabel: "Image actions",
@@ -643,6 +655,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
   const tiles = new Map(),
     state = {
       mode: "pen",
+      selectionShape: "lasso",
       scale: 0.1,
       panX: 0,
       panY: 0,
@@ -2592,6 +2605,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       sourceName:item.sourceName,
       blob:item.blob,
       image:item.image,
+      model:item.model || null,
     };
   }
   function storedImageRecord(item) {
@@ -2605,6 +2619,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       naturalH:item.naturalH,
       sourceName:item.sourceName,
       blob:item.blob,
+      model:item.model || null,
     };
   }
   function imageRecord(item) {
@@ -2624,6 +2639,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       sourceName:typeof item.sourceName === "string" ? item.sourceName.trim().slice(0, 160) : "",
       blob:item.blob,
       image:item.image,
+      model:item.model && typeof item.model === "object" && typeof item.model.data === "string" && item.model.data ? { data:item.model.data } : null,
     };
   }
   function imageHistoryState() {
@@ -2783,6 +2799,24 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       scale = Math.max(minimumScale, Math.min(maximumScale, requestedScale));
     return { ...start, w:start.w * scale, h:start.h * scale };
   }
+  function beginImageDrag(event, point, item) {
+    // Free move: drag an image body directly in hand mode without entering
+    // the persistent edit mode or showing the side action bar.
+    if (!item || !state.images.includes(item) || Number(event.button) !== 0) return false;
+    if (state.imageEdit && state.imageEdit.id !== item.id) acceptImageEdit({ restoreMode:false });
+    recordImagesBefore();
+    state.imageGesture = {
+      id:event.pointerId,
+      image:item,
+      hit:"move",
+      startPoint:point,
+      start:imageLayout(item),
+      changed:false,
+      freeMove:true,
+    };
+    setCanvasCursor("grabbing");
+    return true;
+  }
   function beginImageGesture(event, point, result) {
     if (!result?.image) return false;
     beginImageEdit(result.image);
@@ -2816,6 +2850,14 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     if (!gesture || gesture.id !== event.pointerId) return false;
     state.imageGesture = null;
     resetCanvasCursor();
+    if (gesture.freeMove) {
+      if (gesture.changed) {
+        state.userRevision++;
+        save();
+        requestRender();
+      }
+      return true;
+    }
     if (gesture.changed && state.imageEdit?.id === gesture.image.id) state.imageEdit.changed = true;
     requestInteractionLayerRender();
     return true;
@@ -2962,7 +3004,6 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       save();
       requestRender();
       enterManualImageHandMode();
-      beginImageEdit(item);
       setStatusKey("imageAdded");
     } catch (error) {
       setStatusKey(error?.statusKey || "imageImportFailed");
@@ -2971,6 +3012,342 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       imagePickerButton.disabled = false;
       imagePickerInput.value = "";
     }
+  }
+  const PDF_MAX_PAGES = 20;
+  function isPdfFile(file) {
+    return file instanceof Blob && (String(file.type || "").toLowerCase() === "application/pdf" || /\.pdf$/i.test(String(file.name || "")));
+  }
+  async function pdfLibrary() {
+    const library = window.pdfjsLib;
+    if (!library?.getDocument) throw imageImportError("pdfUnsupported");
+    if (!library.GlobalWorkerOptions.workerSrc) {
+      library.GlobalWorkerOptions.workerSrc = "vendor/pdf.worker.min.js";
+    }
+    return library;
+  }
+  async function prepareImportedPdf(file) {
+    if (!(file instanceof Blob) || file.size <= 0 || file.size > MAX_IMAGE_SOURCE_BYTES) throw imageImportError("imageTooLarge");
+    const library = await pdfLibrary();
+    let pdfDocument;
+    try {
+      pdfDocument = await library.getDocument({ data: await file.arrayBuffer() }).promise;
+    } catch {
+      throw imageImportError("pdfUnsupported");
+    }
+    const pageCount = Math.min(pdfDocument.numPages, PDF_MAX_PAGES),
+      prepared = [];
+    for (let number = 1; number <= pageCount; number++) {
+      const page = await pdfDocument.getPage(number),
+        base = page.getViewport({ scale: 1 }),
+        scale = Math.min(3, MAX_IMAGE_DIMENSION / base.width, MAX_IMAGE_DIMENSION / base.height, Math.sqrt(MAX_IMAGE_PIXELS / (base.width * base.height))),
+        viewport = page.getViewport({ scale }),
+        width = Math.max(1, Math.round(viewport.width)),
+        height = Math.max(1, Math.round(viewport.height)),
+        canvas = offscreen(width, height),
+        context = canvas.getContext("2d");
+      // PDF pages have no intrinsic background; fill white so ink stays readable.
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, width, height);
+      await page.render({ canvasContext: context, viewport }).promise;
+      const blob = await canvasBlob(canvas, "image/webp", 0.92);
+      canvas.width = canvas.height = 1;
+      if (!blob || blob.size <= 0 || blob.size > MAX_IMAGE_SOURCE_BYTES) throw imageImportError("imageTooLarge");
+      prepared.push({ blob, image:await imageFromBlob(blob), naturalW:width, naturalH:height });
+    }
+    return prepared;
+  }
+  function pdfPagePlacement(first, naturalW, naturalH, index, previous) {
+    if (index === 0 || !previous) return first;
+    const scale = first.w / naturalW,
+      w = naturalW * scale,
+      h = naturalH * scale,
+      x = first.x,
+      y = previous.y + previous.h + Math.max(40, first.h * 0.05);
+    // Start a new column when the page stack would run past the canvas edge.
+    if (y + h > SIZE) {
+      return {
+        x:Math.max(0, Math.min(SIZE - w, first.x + first.w + Math.max(80, first.w * 0.08))),
+        y:first.y,
+        w,
+        h,
+      };
+    }
+    return { x, y, w, h };
+  }
+  async function addPdfFile(file) {
+    if (state.imageImporting) return;
+    cancelWidgetRefinement("image-import-started");
+    if (state.images.length >= MAX_VISIBLE_IMAGES) {
+      setStatusKey("imageLimitReached");
+      return;
+    }
+    if (selectionAIBusy()) {
+      setStatusKey(selectionAIStatusKey());
+      return;
+    }
+    const expectedIdentityGeneration = canvasIdentityGeneration();
+    state.imageImporting = true;
+    imagePickerButton.disabled = true;
+    setStatusKey("pdfLoading");
+    try {
+      const preparedPages = await prepareImportedPdf(file);
+      if (expectedIdentityGeneration !== canvasIdentityGeneration()) return;
+      if (state.pending) acceptPending();
+      if (state.pendingWidgetReplacement) rejectPendingWidget(AI_CANCELLED);
+      else if (state.pendingWidget) acceptPendingWidget();
+      if (state.images.length + preparedPages.length > MAX_VISIBLE_IMAGES) throw imageImportError("imageLimitReached");
+      if (state.selection) commitSelection();
+      if (state.selection) {
+        setStatusKey(selectionAIStatusKey());
+        return;
+      }
+      if (state.widgetEdit) acceptWidgetEdit();
+      if (state.animationEdit) acceptAnimationEdit();
+      if (state.imageEdit) acceptImageEdit();
+      recordImagesBefore();
+      const firstPlacement = importedImagePlacement(preparedPages[0].naturalW, preparedPages[0].naturalH),
+        baseName = String(file?.name || "document").replace(/\.pdf$/i, "").slice(0, 120) || "document";
+      let previous = null;
+      const items = [];
+      preparedPages.forEach((prepared, index) => {
+        const placement = pdfPagePlacement(firstPlacement, prepared.naturalW, prepared.naturalH, index, previous);
+        previous = placement;
+        const item = imageRecord({
+          id:`image-${state.nextImageId++}`,
+          ...placement,
+          ...prepared,
+          sourceName:`${baseName} · p${index + 1}`,
+        });
+        if (item) {
+          state.images.push(item);
+          items.push(item);
+        }
+      });
+      if (!items.length) throw imageImportError("imageImportFailed");
+      state.userRevision++;
+      save();
+      requestRender();
+      enterManualImageHandMode();
+      setStatusKey("pdfAdded");
+    } catch (error) {
+      setStatusKey(error?.statusKey || "imageImportFailed");
+    } finally {
+      state.imageImporting = false;
+      imagePickerButton.disabled = false;
+      imagePickerInput.value = "";
+    }
+  }
+  const MODEL_MAX_BYTES = 20 * 1024 * 1024;
+  let modelPreviewFrameElement = null,
+    modelPreviewFrameReady = null,
+    modelViewerState = null;
+  function isModelFile(file) {
+    return file instanceof Blob && (/\.glb$|\.gltf$/i.test(String(file.name || "")) || String(file.type || "").toLowerCase() === "model/gltf-binary");
+  }
+  function modelDataUrl(buffer) {
+    let binary = "";
+    const bytes = new Uint8Array(buffer),
+      chunkSize = 0x8000;
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+      binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+    }
+    return `data:model/gltf-binary;base64,${btoa(binary)}`;
+  }
+  function modelViewerMessage(frame, payload, replyType, timeoutMs = 90000) {
+    const source = frame.contentWindow;
+    if (!source) return Promise.reject(imageImportError("modelUnsupported"));
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        window.removeEventListener("message", listener);
+        reject(imageImportError("modelUnsupported"));
+      }, timeoutMs);
+      const listener = (event) => {
+        if (event.source !== source || event.origin !== location.origin) return;
+        const data = event.data || {};
+        if (data.type === "penecho-model-error" || data.type === replyType) {
+          clearTimeout(timer);
+          window.removeEventListener("message", listener);
+          if (data.type === replyType) resolve(data);
+          else reject(imageImportError("modelUnsupported"));
+        }
+      };
+      window.addEventListener("message", listener);
+      source.postMessage(payload, location.origin);
+    });
+  }
+  function modelPreviewFrame() {
+    if (modelPreviewFrameElement) return modelPreviewFrameElement;
+    const frame = document.createElement("iframe");
+    frame.className = "model-offscreen-frame";
+    frame.title = "3D model preview";
+    // The viewer announces itself once its scripts have loaded; capture that
+    // before setting src so the ready message can never be missed.
+    modelPreviewFrameReady = new Promise((resolve) => {
+      const listener = (event) => {
+        if (event.source !== frame.contentWindow || event.origin !== location.origin) return;
+        if (event.data?.type === "penecho-model-ready") resolve();
+      };
+      window.addEventListener("message", listener);
+    });
+    frame.src = "model-viewer.html";
+    document.body.appendChild(frame);
+    modelPreviewFrameElement = frame;
+    return frame;
+  }
+  function readyModelPreviewFrame() {
+    modelPreviewFrame();
+    return Promise.race([
+      modelPreviewFrameReady,
+      new Promise((resolve) => setTimeout(resolve, 30000)),
+    ]);
+  }
+  async function addModelFile(file) {
+    if (state.imageImporting) return;
+    cancelWidgetRefinement("image-import-started");
+    if (state.images.length >= MAX_VISIBLE_IMAGES) {
+      setStatusKey("imageLimitReached");
+      return;
+    }
+    if (selectionAIBusy()) {
+      setStatusKey(selectionAIStatusKey());
+      return;
+    }
+    if (!(file instanceof Blob) || file.size <= 0 || file.size > MODEL_MAX_BYTES) {
+      setStatusKey("imageTooLarge");
+      return;
+    }
+    const expectedIdentityGeneration = canvasIdentityGeneration();
+    state.imageImporting = true;
+    imagePickerButton.disabled = true;
+    setStatusKey("modelLoading");
+    try {
+      const data = modelDataUrl(await file.arrayBuffer());
+      await readyModelPreviewFrame();
+      await modelViewerMessage(modelPreviewFrameElement, { type:"penecho-model-open", data }, "penecho-model-loaded");
+      const snapshot = await modelViewerMessage(modelPreviewFrameElement, { type:"penecho-model-snapshot-request" }, "penecho-model-snapshot");
+      if (expectedIdentityGeneration !== canvasIdentityGeneration()) return;
+      const blob = dataUrlBlob(snapshot.data),
+        image = await imageFromBlob(blob);
+      if (!blob || blob.size <= 0 || !image) throw imageImportError("modelUnsupported");
+      if (state.pending) acceptPending();
+      if (state.pendingWidgetReplacement) rejectPendingWidget(AI_CANCELLED);
+      else if (state.pendingWidget) acceptPendingWidget();
+      if (state.images.length >= MAX_VISIBLE_IMAGES) throw imageImportError("imageLimitReached");
+      if (state.selection) commitSelection();
+      if (state.selection) {
+        setStatusKey(selectionAIStatusKey());
+        return;
+      }
+      if (state.widgetEdit) acceptWidgetEdit();
+      if (state.animationEdit) acceptAnimationEdit();
+      if (state.imageEdit) acceptImageEdit();
+      recordImagesBefore();
+      const item = imageRecord({
+        id:`image-${state.nextImageId++}`,
+        ...importedImagePlacement(image.naturalWidth, image.naturalHeight),
+        blob,
+        image,
+        naturalW:image.naturalWidth,
+        naturalH:image.naturalHeight,
+        sourceName:typeof file.name === "string" ? file.name : "",
+        model:{ data },
+      });
+      if (!item) throw imageImportError("modelImportFailed");
+      state.images.push(item);
+      state.userRevision++;
+      save();
+      requestRender();
+      enterManualImageHandMode();
+      setStatusKey("modelAdded");
+    } catch (error) {
+      setStatusKey(error?.statusKey || "imageImportFailed");
+    } finally {
+      state.imageImporting = false;
+      imagePickerButton.disabled = false;
+      imagePickerInput.value = "";
+    }
+  }
+  function closeModelViewer() {
+    if (!modelViewerState) return;
+    document.removeEventListener("keydown", modelViewerState.onKeyDown, true);
+    modelViewerState.overlay.remove();
+    modelViewerState = null;
+  }
+  function openModelViewer(item) {
+    if (!item?.model?.data) return;
+    closeModelViewer();
+    const overlay = document.createElement("div"),
+      frame = document.createElement("iframe"),
+      bar = document.createElement("div"),
+      hint = document.createElement("span"),
+      useButton = document.createElement("button"),
+      closeButton = document.createElement("button");
+    overlay.className = "model-viewer-overlay";
+    overlay.id = "modelViewerOverlay";
+    frame.className = "model-viewer-frame";
+    frame.title = t("modelView");
+    bar.className = "model-viewer-bar";
+    hint.className = "model-viewer-hint";
+    hint.textContent = item.sourceName || t("modelView");
+    useButton.type = "button";
+    useButton.className = "model-viewer-button";
+    useButton.textContent = t("modelUseView");
+    closeButton.type = "button";
+    closeButton.className = "model-viewer-button";
+    closeButton.textContent = t("modelClose");
+    bar.append(hint, useButton, closeButton);
+    overlay.append(frame, bar);
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        closeModelViewer();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    const ready = new Promise((resolve) => {
+      const listener = (event) => {
+        if (event.source !== frame.contentWindow || event.origin !== location.origin) return;
+        if (event.data?.type === "penecho-model-ready") resolve();
+      };
+      window.addEventListener("message", listener);
+    });
+    frame.src = "model-viewer.html";
+    document.body.appendChild(overlay);
+    modelViewerState = { overlay, frame, itemId:item.id, onKeyDown };
+    Promise.race([
+      ready,
+      new Promise((resolve) => setTimeout(resolve, 30000)),
+    ]).then(() => {
+      if (modelViewerState?.frame !== frame) return;
+      return modelViewerMessage(frame, { type:"penecho-model-open", data:item.model.data }, "penecho-model-loaded", 120000);
+    }).catch(() => {
+      if (modelViewerState?.itemId === item.id) closeModelViewer();
+    });
+    useButton.addEventListener("click", async () => {
+      const target = state.images.find((image) => image.id === modelViewerState?.itemId);
+      if (!target?.model) {
+        closeModelViewer();
+        return;
+      }
+      try {
+        const snapshot = await modelViewerMessage(frame, { type:"penecho-model-snapshot-request" }, "penecho-model-snapshot"),
+          blob = dataUrlBlob(snapshot.data),
+          image = await imageFromBlob(blob);
+        if (!blob || blob.size <= 0 || blob.size > MAX_IMAGE_SOURCE_BYTES || !image) throw imageImportError("modelUnsupported");
+        recordImagesBefore();
+        target.blob = blob;
+        target.image = image;
+        target.naturalW = image.naturalWidth;
+        target.naturalH = image.naturalHeight;
+        state.userRevision++;
+        save();
+        requestRender();
+        closeModelViewer();
+      } catch {
+        closeModelViewer();
+      }
+    });
+    closeButton.addEventListener("click", closeModelViewer);
   }
   function widgetBox(widget) {
     return { x: widget.x, y: widget.y, w: widget.w, h: widget.h };
@@ -4316,43 +4693,48 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       r = view.getBoundingClientRect();
     ctx.setTransform(d, 0, 0, d, 0, 0);
     ctx.clearRect(0, 0, r.width, r.height);
-    ctx.fillStyle = state.paint.outside;
+    // The board reads as endless paper: paint and grid cover the whole
+    // viewport instead of stopping at the logical canvas edge.
+    ctx.fillStyle = state.paint.paper;
     ctx.fillRect(0, 0, r.width, r.height);
     ctx.save();
     ctx.translate(state.panX, state.panY);
     ctx.scale(state.scale, state.scale);
-    ctx.fillStyle = state.paint.paper;
-    ctx.fillRect(0, 0, SIZE, SIZE);
-    const l = Math.max(0, -state.panX / state.scale),
-      t = Math.max(0, -state.panY / state.scale),
-      rr = Math.min(SIZE, (r.width - state.panX) / state.scale),
-      b = Math.min(SIZE, (r.height - state.panY) / state.scale);
+    const l = -state.panX / state.scale,
+      t = -state.panY / state.scale,
+      rr = (r.width - state.panX) / state.scale,
+      b = (r.height - state.panY) / state.scale,
+      vl = Math.max(0, l),
+      vt = Math.max(0, t),
+      vr = Math.min(SIZE, rr),
+      vb = Math.min(SIZE, b);
+    if (state.gridVisible) {
+      // Fall back to a coarser spacing when the fine grid would crowd the screen.
+      const spacing = 500 * state.scale >= 6 ? 500 : 5000 * state.scale >= 6 ? 5000 : 0;
+      if (spacing) {
+        ctx.strokeStyle = state.paint.paperGrid;
+        ctx.lineWidth = 1 / state.scale;
+        ctx.beginPath();
+        for (let x = Math.floor(l / spacing) * spacing; x < rr; x += spacing) {
+          ctx.moveTo(x, t);
+          ctx.lineTo(x, b);
+        }
+        for (let y = Math.floor(t / spacing) * spacing; y < b; y += spacing) {
+          ctx.moveTo(l, y);
+          ctx.lineTo(rr, y);
+        }
+        ctx.stroke();
+      }
+    }
     ctx.save();
     ctx.beginPath();
     ctx.rect(0, 0, SIZE, SIZE);
     ctx.clip();
-    if (state.gridVisible) {
-      ctx.strokeStyle = state.paint.paperGrid;
-      ctx.lineWidth = 1 / state.scale;
-      ctx.beginPath();
-      for (let x = Math.floor(l / 500) * 500; x < rr; x += 500) {
-        ctx.moveTo(x, t);
-        ctx.lineTo(x, b);
-      }
-      for (let y = Math.floor(t / 500) * 500; y < b; y += 500) {
-        ctx.moveTo(l, y);
-        ctx.lineTo(rr, y);
-      }
-      ctx.stroke();
-    }
-    drawImagesToContext(ctx, { x:l, y:t, w:rr - l, h:b - t });
-    drawTextBoxesToContext(ctx, { x:l, y:t, w:rr - l, h:b - t });
+    drawImagesToContext(ctx, { x:vl, y:vt, w:vr - vl, h:vb - vt });
+    drawTextBoxesToContext(ctx, { x:vl, y:vt, w:vr - vl, h:vb - vt });
     ctx.restore();
-    ctx.strokeStyle = state.paint.border;
-    ctx.lineWidth = 2 / state.scale;
-    ctx.strokeRect(0, 0, SIZE, SIZE);
     ctx.restore();
-    renderInkLayer({ x:l, y:t, w:rr - l, h:b - t });
+    renderInkLayer({ x:vl, y:vt, w:vr - vl, h:vb - vt });
     renderInteractionLayer();
     positionWidgets();
     positionTextEditors();
@@ -4420,28 +4802,9 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     context.restore();
   }
   function positionImageEditBar() {
-    const item = state.imageEdit ? selectedImage() : null;
-    if (!item) {
-      if (!imageEditBar.hidden) imageEditBar.hidden = true;
-      return;
-    }
-    if (imageEditBar.hidden) imageEditBar.hidden = false;
-    const rect = view.getBoundingClientRect(),
-      box = imageBox(item),
-      left = state.panX + box.x * state.scale,
-      top = state.panY + box.y * state.scale,
-      width = box.w * state.scale,
-      height = box.h * state.scale,
-      barWidth = imageEditBar.offsetWidth || 200,
-      barHeight = imageEditBar.offsetHeight || 210,
-      gap = 12,
-      style = runtimeElementStyle(imageEditBar, "image-edit-bar");
-    let x = left + width + gap;
-    if (x + barWidth > rect.width - 8) x = left - barWidth - gap;
-    if (x < 8) x = Math.max(8, Math.min(rect.width - barWidth - 8, left + width / 2 - barWidth / 2));
-    const y = Math.max(8, Math.min(rect.height - barHeight - 8, top + height / 2 - barHeight / 2));
-    style?.setProperty("--image-edit-bar-x", `${x.toFixed(1)}px`);
-    style?.setProperty("--image-edit-bar-y", `${y.toFixed(1)}px`);
+    // The side action bar is retired: actions live in the right-click menu and
+    // free drag moves images, so a floating bar would only obstruct the page.
+    if (!imageEditBar.hidden) imageEditBar.hidden = true;
   }
   function drawImageChrome(context) {
     const item = state.imageEdit ? selectedImage() : null;
@@ -4897,8 +5260,10 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
   function clientPoint(e) {
     const r = view.getBoundingClientRect();
     return {
-      x: (e.clientX - r.left - state.panX) / state.scale,
-      y: (e.clientY - r.top - state.panY) / state.scale,
+      // Clamp into the logical canvas so input beyond the edge still lands
+      // on the paper instead of being rejected.
+      x: Math.max(0, Math.min(SIZE, (e.clientX - r.left - state.panX) / state.scale)),
+      y: Math.max(0, Math.min(SIZE, (e.clientY - r.top - state.panY) / state.scale)),
     };
   }
   function blockCanvasInput(duration = 1000) {
@@ -5552,7 +5917,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       },
       distance = Math.max(1, Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y)),
       r = view.getBoundingClientRect(),
-      next = Math.max(0.03, Math.min(2, (g.scale * distance) / g.distance)),
+      next = Math.max(0.01, Math.min(2, (g.scale * distance) / g.distance)),
       anchorX = (g.center.x - r.left - g.panX) / g.scale,
       anchorY = (g.center.y - r.top - g.panY) / g.scale;
     state.scale = next;
@@ -5572,7 +5937,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
   function zoomCanvasAt(clientX, clientY, deltaY) {
     const rect = view.getBoundingClientRect(),
       factor = deltaY < 0 ? 1.12 : 0.89,
-      next = Math.max(0.03, Math.min(2, state.scale * factor)),
+      next = Math.max(0.01, Math.min(2, state.scale * factor)),
       px = clientX - rect.left,
       py = clientY - rect.top;
     state.panX = px - ((px - state.panX) * next) / state.scale;
@@ -6189,7 +6554,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     restoreImages(images);
     await restoreTextBoxes(item.textBoxes);
     if (item.view) {
-      state.scale = Math.max(0.03, Math.min(2, item.view.scale));
+      state.scale = Math.max(0.01, Math.min(2, item.view.scale));
       state.panX = item.view.panX;
       state.panY = item.view.panY;
       updateCoordinates();
@@ -6815,10 +7180,14 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       false,
     );
     if (!fragments.length) {
-      state.selection = null;
-      setStatusKey("selectionEmpty");
-      render();
-      return false;
+      // Keep the selection when the region covers placed content — images
+      // (PDF pages), text boxes, or widgets — so it can still be scoped to the AI.
+      if (!visibleImages(box).length && !visibleTextBoxes(box).length && !(widgetRuntimeEnabled() && visibleWidgets(box).length)) {
+        state.selection = null;
+        setStatusKey("selectionEmpty");
+        render();
+        return false;
+      }
     }
     invalidateSharpOverlays(box);
     save();
@@ -7017,8 +7386,18 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       ? SELECT.hitTestPath(selection.path, selection.box, point, size, includeLegacyActions)
       : SELECT.hitTest(selection.box, point, size, includeLegacyActions);
   }
+  function rectanglePoints(start, end) {
+    const a = SELECT.clipPoint(start, SIZE),
+      b = SELECT.clipPoint(end, SIZE),
+      left = Math.min(a.x, b.x),
+      right = Math.max(a.x, b.x),
+      top = Math.min(a.y, b.y),
+      bottom = Math.max(a.y, b.y);
+    return [{ x:left, y:top }, { x:right, y:top }, { x:right, y:bottom }, { x:left, y:bottom }];
+  }
   function beginSelectionLasso(event, point) {
-    state.selection = { phase: "lasso", points: [SELECT.clipPoint(point, SIZE)], box: null };
+    const shape = state.selectionShape === "rect" ? "rect" : "lasso";
+    state.selection = { phase: "lasso", shape, points: [SELECT.clipPoint(point, SIZE)], box: null, startPoint: SELECT.clipPoint(point, SIZE) };
     state.selectionGesture = { id: event.pointerId, hit: "lasso" };
     resetCanvasCursor();
     requestRender();
@@ -7046,11 +7425,16 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     if (!gesture || !selection || gesture.id !== event.pointerId || selectionAIBusy(selection)) return false;
     const point = clientPoint(event);
     if (gesture.hit === "lasso") {
-      const samples = typeof event.getCoalescedEvents === "function" ? event.getCoalescedEvents() : [],
-        events = samples.length ? samples : [event],
-        minimumDistance = 0.75 / Math.max(0.03, state.scale);
-      for (const sample of events) addLassoPoint(selection, SELECT.clipPoint(clientPoint(sample), SIZE), minimumDistance);
-      selection.box = SELECT.polygonBounds(selection.points, SIZE);
+      if (selection.shape === "rect") {
+        selection.points = rectanglePoints(selection.startPoint, point);
+        selection.box = SELECT.polygonBounds(selection.points, SIZE);
+      } else {
+        const samples = typeof event.getCoalescedEvents === "function" ? event.getCoalescedEvents() : [],
+          events = samples.length ? samples : [event],
+          minimumDistance = 0.75 / Math.max(0.03, state.scale);
+        for (const sample of events) addLassoPoint(selection, SELECT.clipPoint(clientPoint(sample), SIZE), minimumDistance);
+        selection.box = SELECT.polygonBounds(selection.points, SIZE);
+      }
     } else if (gesture.hit === "move") selection.box = SELECT.moveBox(gesture.startBox, point.x - gesture.startPoint.x, point.y - gesture.startPoint.y, SIZE);
     else if (gesture.hit === "resize") selection.box = SELECT.resizeBox(gesture.startBox, point, 24 / state.scale, SIZE);
     else if (gesture.hit === "width" || gesture.hit === "height") selection.box = SELECT.resizeBoxAxis(gesture.startBox, point, gesture.hit, 24 / state.scale, SIZE);
@@ -7066,8 +7450,11 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     resetCanvasCursor();
     if (gesture.hit === "lasso") {
       if (selection && event.type !== "pointercancel") {
-        const point = SELECT.clipPoint(clientPoint(event), SIZE);
-        addLassoPoint(selection, point, 0.5 / state.scale);
+        if (selection.shape === "rect") selection.points = rectanglePoints(selection.startPoint, clientPoint(event));
+        else {
+          const point = SELECT.clipPoint(clientPoint(event), SIZE);
+          addLassoPoint(selection, point, 0.5 / state.scale);
+        }
       }
       const points = selection?.points || [];
       state.selection = null;
@@ -7560,8 +7947,53 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       hotspotGrid,
     };
   }
+  function buildSelectionRegionImage(selection) {
+    // Selections over placed images (a PDF page region, a photo) hold no ink
+    // fragments; capture the full scene inside the selection box instead.
+    const sourceRect = { ...selection.box };
+    if (!sourceRect.w || !sourceRect.h) return null;
+    const imageScale = Math.min(1, MAX_ATLAS_WIDTH / sourceRect.w, MAX_ATLAS_HEIGHT / sourceRect.h) * (1 - Number.EPSILON * 4),
+      imageSize = {
+        w: Math.max(1, Math.min(MAX_ATLAS_WIDTH, Math.ceil(sourceRect.w * imageScale))),
+        h: Math.max(1, Math.min(MAX_ATLAS_HEIGHT, Math.ceil(sourceRect.h * imageScale))),
+      },
+      out = offscreen(imageSize.w, imageSize.h),
+      q = out.getContext("2d");
+    q.fillStyle = "#fff";
+    q.fillRect(0, 0, out.width, out.height);
+    q.setTransform(imageScale, 0, 0, imageScale, -sourceRect.x * imageScale, -sourceRect.y * imageScale);
+    drawImagesToContext(q, sourceRect);
+    drawTextBoxesToContext(q, sourceRect);
+    drawWidgetsToContext(q, sourceRect);
+    q.setTransform(1, 0, 0, 1, 0, 0);
+    const path = selectionPathFor(selection);
+    debug("selection-atlas-built", {
+      sourceRect,
+      contentRect: { ...sourceRect },
+      imageSize,
+      imageScale: Number(imageScale.toFixed(4)),
+      pathPoints: path.length,
+    });
+    return {
+      atlasImage: out.toDataURL("image/png"),
+      atlasSize: imageSize,
+      visibleRect: { x: 0, y: 0, w: SIZE, h: SIZE },
+      captureRect: { ...sourceRect },
+      sourceRect,
+      imageScale,
+      changedBox: { ...sourceRect },
+      focusInset: null,
+      hotspotGrid: { columns: 8, rows: 8, order: "oldest-to-newest", attention: "newest unconsumed pen path; use ordered cells to read and apply every edit inside latestInput.imageRect", hotspots: [] },
+      selectionContext: {
+        box: { ...selection.box },
+        path: path.map((point) => ({ x: point.x, y: point.y })),
+        closed: true,
+      },
+    };
+  }
   function buildSelectionImage(selection) {
-    if (!selection || selection.phase !== "active" || !selection.fragments?.length) return null;
+    if (!selection || selection.phase !== "active") return null;
+    if (!selection.fragments?.length) return buildSelectionRegionImage(selection);
     const content = selectionContentBounds(selection);
     if (!content || content.w <= 0 || content.h <= 0) return null;
     // Use the lasso's own minimum bounding rectangle; the polygon exterior stays white.
@@ -7576,6 +8008,13 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     q.fillStyle = "#fff";
     q.fillRect(0, 0, out.width, out.height);
     q.setTransform(imageScale, 0, 0, imageScale, -sourceRect.x * imageScale, -sourceRect.y * imageScale);
+    // Composite the full scene under the lasso first (placed images such as
+    // PDF pages, text boxes, widgets), then the captured ink fragments on top,
+    // so the model sees everything inside the highlighted region.
+    drawImagesToContext(q, sourceRect);
+    drawTextBoxesToContext(q, sourceRect);
+    drawWidgetsToContext(q, sourceRect);
+    forTiles(sourceRect.x, sourceRect.y, sourceRect.w, sourceRect.h, (c, tx, ty) => q.drawImage(c, tx * TILE, ty * TILE), false);
     for (const fragment of selection.fragments) {
       const target = SELECT.mapFragment(fragment, selection.originalBox, selection.box);
       q.drawImage(fragment.renderImage || fragment.image, target.x, target.y, target.w, target.h);
@@ -9905,6 +10344,17 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       beginImageGesture(e, point, selectedImageResult);
       return;
     }
+    // Dragging an image body moves it freely; pan still works on blank paper.
+    if (valid(point)) {
+      const draggedImage = imageAtPoint(point);
+      if (draggedImage && e.pointerType !== "touch" && beginImageDrag(e, point, draggedImage)) return;
+      // Blank paper (or a click elsewhere) ends image edit mode — the retired
+      // side bar no longer provides the "Place image" action.
+      if (!draggedImage && state.imageEdit && !textBoxAtPoint(point)) {
+        acceptImageEdit();
+        return;
+      }
+    }
     if (valid(point)) {
       const animationResult = animationPointerHit(point, e.pointerType);
       if (animationResult && animationResult.hit !== "move") {
@@ -10068,7 +10518,57 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     state.pointerPreview = null;
     requestInteractionLayerRender();
   });
-  screen.addEventListener("contextmenu", (e) => e.preventDefault());
+  // Right-click opens actions for whatever sits under the pointer (images).
+  const objectContextMenu = document.querySelector("#objectContextMenu");
+  function hideObjectContextMenu() {
+    if (objectContextMenu.hidden) return;
+    objectContextMenu.hidden = true;
+    objectContextMenu.replaceChildren();
+  }
+  function addContextMenuItem(label, action, className = "") {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `object-context-item${className ? ` ${className}` : ""}`;
+    button.setAttribute("role", "menuitem");
+    button.textContent = label;
+    button.addEventListener("click", () => {
+      hideObjectContextMenu();
+      action();
+    });
+    objectContextMenu.appendChild(button);
+  }
+  function showObjectContextMenu(event) {
+    const rect = view.getBoundingClientRect(),
+      width = objectContextMenu.offsetWidth || 180,
+      height = objectContextMenu.offsetHeight || 120,
+      left = Math.max(6, Math.min(rect.width - width - 6, event.clientX - rect.left)),
+      top = Math.max(6, Math.min(rect.height - height - 6, event.clientY - rect.top)),
+      style = runtimeElementStyle(objectContextMenu, "object-context-menu");
+    style?.setProperty("--object-context-x", `${left.toFixed(0)}px`);
+    style?.setProperty("--object-context-y", `${top.toFixed(0)}px`);
+  }
+  screen.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    hideObjectContextMenu();
+    const point = clientPoint(event),
+      item = valid(point) ? imageAtPoint(point) : null;
+    if (!item) return;
+    if (item.model) addContextMenuItem(t("modelView"), () => openModelViewer(item));
+    addContextMenuItem(t("imageEditMenu"), () => {
+      enterManualImageHandMode();
+      beginImageEdit(item);
+    });
+    addContextMenuItem(t("imageMerge"), () => mergeImage(item));
+    addContextMenuItem(t("imageDelete"), () => deleteImage(item), "danger");
+    objectContextMenu.hidden = false;
+    showObjectContextMenu(event);
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (!objectContextMenu.contains(event.target)) hideObjectContextMenu();
+  }, true);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") hideObjectContextMenu();
+  });
   view.addEventListener(
     "wheel",
     (e) => {
@@ -10185,9 +10685,25 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
   });
   imagePickerInput.addEventListener("change", () => {
     const file = imagePickerInput.files?.[0];
-    if (file) void addImageFile(file);
+    if (file) void (isModelFile(file) ? addModelFile(file) : isPdfFile(file) ? addPdfFile(file) : addImageFile(file));
     else imagePickerInput.value = "";
   });
+  const rectSelectToggle = document.querySelector("#rectSelectToggleBtn");
+  function syncSelectionShape() {
+    if (!rectSelectToggle) return;
+    const rect = state.selectionShape === "rect";
+    rectSelectToggle.classList.toggle("active", rect);
+    rectSelectToggle.setAttribute("aria-pressed", String(rect));
+    const title = t(rect ? "selectionShapeRect" : "selectionShapeLasso");
+    rectSelectToggle.title = title;
+    rectSelectToggle.setAttribute("aria-label", title);
+  }
+  if (rectSelectToggle) rectSelectToggle.onclick = () => {
+    state.selectionShape = state.selectionShape === "rect" ? "lasso" : "rect";
+    syncSelectionShape();
+    setStatusKey(state.selectionShape === "rect" ? "selectionShapeRect" : "selectionShapeLasso");
+  };
+  syncSelectionShape();
   function clipboardTextEditorPoint() {
     const rect = view.getBoundingClientRect(),
       scale = Math.max(0.03, state.scale),
@@ -10231,6 +10747,14 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     return true;
   }
   async function importClipboardPayload(payload) {
+    if (payload?.model instanceof Blob) {
+      await addModelFile(payload.model);
+      return true;
+    }
+    if (payload?.pdf instanceof Blob) {
+      await addPdfFile(payload.pdf);
+      return true;
+    }
     if (payload?.image instanceof Blob) {
       await addImageFile(payload.image);
       return true;
@@ -10245,6 +10769,10 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       itemImage = [...(data.items || [])].find((item) => String(item.type || "").toLowerCase().startsWith("image/")),
       image = files.find((file) => String(file.type || "").toLowerCase().startsWith("image/")) || itemImage?.getAsFile?.() || null;
     if (image) return { image };
+    const pdf = files.find(isPdfFile) || null;
+    if (pdf) return { pdf };
+    const model = files.find(isModelFile) || null;
+    if (model) return { model };
     const text = data.getData?.("text/plain") || "";
     return text ? { text } : null;
   }
@@ -10286,6 +10814,18 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     if (editableClipboardTarget(event.target)) return;
     event.preventDefault();
     void importClipboardPayload(clipboardPayloadFromDataTransfer(event.clipboardData));
+  });
+  // Drag-and-drop imports: PDFs and images land on the board like pasted files.
+  document.addEventListener("dragover", (event) => {
+    if (editableClipboardTarget(event.target)) return;
+    event.preventDefault();
+  });
+  document.addEventListener("drop", (event) => {
+    if (editableClipboardTarget(event.target)) return;
+    const payload = clipboardPayloadFromDataTransfer(event.dataTransfer);
+    if (!payload) return;
+    event.preventDefault();
+    void importClipboardPayload(payload);
   });
   if (selectionTypesetButton) selectionTypesetButton.onclick = normalizeSelectionForAI;
   if (selectionDeleteButton) selectionDeleteButton.onclick = deleteSelection;

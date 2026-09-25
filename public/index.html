@@ -100,6 +100,9 @@
             <button id="lassoToolBtn" data-mode="select" class="icon-button" type="button" aria-pressed="false" data-i18n-aria="select" aria-label="Lasso select" data-i18n-title="select" title="Lasso select">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.5 5.5c3.2 3.1-.8 7.5-5.1 8.8-4.9 1.5-11.2-.1-10.2-4.5.8-3.8 6.6-5.7 11.2-4.6 4.1 1 6.4 5 4.4 8.5-1.4 2.5-4.8 3.8-7.8 4.1"/><path d="m8 16 3 1.8-2.3 2.6"/></svg>
             </button>
+            <button id="rectSelectToggleBtn" class="icon-button" type="button" aria-pressed="false" aria-label="Rectangle selection" title="Rectangle selection">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="6" width="16" height="12" rx="2" stroke-dasharray="3.5 3"/></svg>
+            </button>
             <button id="textToolBtn" data-mode="text" class="icon-button" type="button" aria-pressed="false" data-i18n-aria="text" aria-label="Text input" data-i18n-title="text" title="Text input">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z"/><path d="M8 8h8M12 8v8M9 16h6"/></svg>
             </button>
@@ -109,7 +112,7 @@
             <button id="clipboardCopyBtn" class="icon-button" type="button" data-i18n-aria="copyFromClipboard" aria-label="Copy from clipboard" data-i18n-title="copyFromClipboard" title="Copy from clipboard">
               <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="16" rx="2"/><path d="M9 5V3h6v2M9 10h6M9 14h6M9 18h4"/></svg>
             </button>
-            <input id="imagePickerInput" type="file" accept="image/*" hidden>
+            <input id="imagePickerInput" type="file" accept="image/*,application/pdf,.pdf,.glb,.gltf,model/gltf-binary" hidden>
           </div>
           <label class="range-control"><span data-i18n="penSize">Pen size</span>
             <input id="penSize" type="range" min="2" max="16" value="4" data-i18n-aria="penSize" aria-label="Pen size">
@@ -284,6 +287,7 @@
             </span>
           </div>
         </div>
+        <div id="objectContextMenu" class="object-context-menu" role="menu" hidden></div>
         <div id="textEditorLayer" class="text-editor-layer" aria-live="polite"></div>
         <div id="textInputHint" class="text-input-hint" hidden><kbd>Ctrl/Cmd</kbd> + <kbd>Enter</kbd> <span data-i18n="textConfirmHint">to confirm</span></div>
         <div id="aiEmbodiment" class="ai-embodiment" data-theme="studio" role="group" data-i18n-aria="aiGuide" aria-label="AI knowledge guide" aria-busy="false">
@@ -507,6 +511,7 @@
   <script src="animation.js"></script>
   <script src="plugins.js"></script>
   <script src="summon.js"></script>
+  <script src="vendor/pdf.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

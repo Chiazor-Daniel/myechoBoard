@@ -51,7 +51,7 @@ test("canvas photos use one picker, editable image records, side action bar, and
     prepareImportedImage = functionSource(app, "prepareImportedImage");
 
   assert.match(html, /id="imagePickerBtn"/);
-  assert.match(html, /id="imagePickerInput" type="file" accept="image\/\*" hidden/);
+  assert.match(html, /id="imagePickerInput" type="file" accept="image\/\*,application\/pdf,\.pdf,\.glb,\.gltf,model\/gltf-binary" hidden/);
   assert.doesNotMatch(html, /id="imagePickerInput"[^>]*\bcapture\b/);
   assert.match(app, /MAX_VISIBLE_IMAGES = 100/);
   assert.match(app, /MAX_IMAGE_DIMENSION = 2048/);
@@ -72,7 +72,8 @@ test("canvas photos use one picker, editable image records, side action bar, and
     resizeImage = vm.runInNewContext(`(${resizeImageBox})`, { SIZE:20000 }),
     resizeStart = { x:100, y:200, w:1200, h:800 };
   assert.doesNotMatch(addImageFile, /requestAI|buildViewportImage/);
-  assert.match(addImageFile, /enterManualImageHandMode\(\)[\s\S]{0,80}?beginImageEdit\(item\)/);
+  assert.match(addImageFile, /enterManualImageHandMode\(\)[\s\S]{0,80}?setStatusKey\("imageAdded"\)/);
+  assert.doesNotMatch(addImageFile, /beginImageEdit/);
   assert.match(functionSource(app, "finishManualImageHandMode"), /imageHandReturnMode/);
   for (const name of ["acceptImageEdit", "cancelImageEdit", "deleteImage", "mergeImage"]) {
     assert.match(functionSource(app, name), /finishManualImageHandMode\(\)/);
@@ -496,7 +497,7 @@ test("new canvases open 1.5 times closer without overriding restored views", () 
   assert.equal(state.panX + 10000 * state.scale, 600);
   assert.equal(state.panY + 10000 * state.scale, 400);
   assert.match(functionSource(persistence, "startBlankCanvas"), /state\.viewInitialized\s*=\s*false;[\s\S]*?fit\(\)/);
-  assert.match(persistence, /state\.scale\s*=\s*Math\.max\(0\.03,\s*Math\.min\(2,\s*item\.view\.scale\)\)/);
+  assert.match(persistence, /state\.scale\s*=\s*Math\.max\(0\.01,\s*Math\.min\(2,\s*item\.view\.scale\)\)/);
 });
 
 test("animation defaults on without overriding an explicitly disabled plugin choice", () => {
@@ -601,7 +602,7 @@ test("strict CSP dynamic layout uses stylesheet rules instead of element style a
     widgetHost = read("public/widget-host.js"),
     helper = functionSource(app, "runtimeElementStyle");
   assert.match(helper, /sheet\.insertRule\(`\.\$\{className\} \{\}`/);
-  for (const key of ["tour-layer", "tour-highlight", "tour-card", "tour-progress", "animation-controls", "image-edit-bar", "selection-toolbar", "summon-copy"])
+  for (const key of ["tour-layer", "tour-highlight", "tour-card", "tour-progress", "animation-controls", "selection-toolbar", "summon-copy"])
     assert.match(app, new RegExp(`runtimeElementStyle\\([^)]*["']${key}["']`));
   assert.doesNotMatch(app, /Reflect\.get\((?:tourLayer|tourHighlight|tourCard|tourProgressBar|animationControls|imageEditBar|selectionToolbar), "style"\)/);
   assert.doesNotMatch(summon, /copyEl\.style\./);

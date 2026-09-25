@@ -454,8 +454,53 @@
       hotspotGrid,
     };
   }
+  function buildSelectionRegionImage(selection) {
+    // Selections over placed images (a PDF page region, a photo) hold no ink
+    // fragments; capture the full scene inside the selection box instead.
+    const sourceRect = { ...selection.box };
+    if (!sourceRect.w || !sourceRect.h) return null;
+    const imageScale = Math.min(1, MAX_ATLAS_WIDTH / sourceRect.w, MAX_ATLAS_HEIGHT / sourceRect.h) * (1 - Number.EPSILON * 4),
+      imageSize = {
+        w: Math.max(1, Math.min(MAX_ATLAS_WIDTH, Math.ceil(sourceRect.w * imageScale))),
+        h: Math.max(1, Math.min(MAX_ATLAS_HEIGHT, Math.ceil(sourceRect.h * imageScale))),
+      },
+      out = offscreen(imageSize.w, imageSize.h),
+      q = out.getContext("2d");
+    q.fillStyle = "#fff";
+    q.fillRect(0, 0, out.width, out.height);
+    q.setTransform(imageScale, 0, 0, imageScale, -sourceRect.x * imageScale, -sourceRect.y * imageScale);
+    drawImagesToContext(q, sourceRect);
+    drawTextBoxesToContext(q, sourceRect);
+    drawWidgetsToContext(q, sourceRect);
+    q.setTransform(1, 0, 0, 1, 0, 0);
+    const path = selectionPathFor(selection);
+    debug("selection-atlas-built", {
+      sourceRect,
+      contentRect: { ...sourceRect },
+      imageSize,
+      imageScale: Number(imageScale.toFixed(4)),
+      pathPoints: path.length,
+    });
+    return {
+      atlasImage: out.toDataURL("image/png"),
+      atlasSize: imageSize,
+      visibleRect: { x: 0, y: 0, w: SIZE, h: SIZE },
+      captureRect: { ...sourceRect },
+      sourceRect,
+      imageScale,
+      changedBox: { ...sourceRect },
+      focusInset: null,
+      hotspotGrid: { columns: 8, rows: 8, order: "oldest-to-newest", attention: "newest unconsumed pen path; use ordered cells to read and apply every edit inside latestInput.imageRect", hotspots: [] },
+      selectionContext: {
+        box: { ...selection.box },
+        path: path.map((point) => ({ x: point.x, y: point.y })),
+        closed: true,
+      },
+    };
+  }
   function buildSelectionImage(selection) {
-    if (!selection || selection.phase !== "active" || !selection.fragments?.length) return null;
+    if (!selection || selection.phase !== "active") return null;
+    if (!selection.fragments?.length) return buildSelectionRegionImage(selection);
     const content = selectionContentBounds(selection);
     if (!content || content.w <= 0 || content.h <= 0) return null;
     // Use the lasso's own minimum bounding rectangle; the polygon exterior stays white.
@@ -470,6 +515,13 @@
     q.fillStyle = "#fff";
     q.fillRect(0, 0, out.width, out.height);
     q.setTransform(imageScale, 0, 0, imageScale, -sourceRect.x * imageScale, -sourceRect.y * imageScale);
+    // Composite the full scene under the lasso first (placed images such as
+    // PDF pages, text boxes, widgets), then the captured ink fragments on top,
+    // so the model sees everything inside the highlighted region.
+    drawImagesToContext(q, sourceRect);
+    drawTextBoxesToContext(q, sourceRect);
+    drawWidgetsToContext(q, sourceRect);
+    forTiles(sourceRect.x, sourceRect.y, sourceRect.w, sourceRect.h, (c, tx, ty) => q.drawImage(c, tx * TILE, ty * TILE), false);
     for (const fragment of selection.fragments) {
       const target = SELECT.mapFragment(fragment, selection.originalBox, selection.box);
       q.drawImage(fragment.renderImage || fragment.image, target.x, target.y, target.w, target.h);

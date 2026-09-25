@@ -549,7 +549,7 @@
     restoreImages(images);
     await restoreTextBoxes(item.textBoxes);
     if (item.view) {
-      state.scale = Math.max(0.03, Math.min(2, item.view.scale));
+      state.scale = Math.max(0.01, Math.min(2, item.view.scale));
       state.panX = item.view.panX;
       state.panY = item.view.panY;
       updateCoordinates();
@@ -1175,10 +1175,14 @@
       false,
     );
     if (!fragments.length) {
-      state.selection = null;
-      setStatusKey("selectionEmpty");
-      render();
-      return false;
+      // Keep the selection when the region covers placed content — images
+      // (PDF pages), text boxes, or widgets — so it can still be scoped to the AI.
+      if (!visibleImages(box).length && !visibleTextBoxes(box).length && !(widgetRuntimeEnabled() && visibleWidgets(box).length)) {
+        state.selection = null;
+        setStatusKey("selectionEmpty");
+        render();
+        return false;
+      }
     }
     invalidateSharpOverlays(box);
     save();
@@ -1377,8 +1381,18 @@
       ? SELECT.hitTestPath(selection.path, selection.box, point, size, includeLegacyActions)
       : SELECT.hitTest(selection.box, point, size, includeLegacyActions);
   }
+  function rectanglePoints(start, end) {
+    const a = SELECT.clipPoint(start, SIZE),
+      b = SELECT.clipPoint(end, SIZE),
+      left = Math.min(a.x, b.x),
+      right = Math.max(a.x, b.x),
+      top = Math.min(a.y, b.y),
+      bottom = Math.max(a.y, b.y);
+    return [{ x:left, y:top }, { x:right, y:top }, { x:right, y:bottom }, { x:left, y:bottom }];
+  }
   function beginSelectionLasso(event, point) {
-    state.selection = { phase: "lasso", points: [SELECT.clipPoint(point, SIZE)], box: null };
+    const shape = state.selectionShape === "rect" ? "rect" : "lasso";
+    state.selection = { phase: "lasso", shape, points: [SELECT.clipPoint(point, SIZE)], box: null, startPoint: SELECT.clipPoint(point, SIZE) };
     state.selectionGesture = { id: event.pointerId, hit: "lasso" };
     resetCanvasCursor();
     requestRender();
@@ -1406,11 +1420,16 @@
     if (!gesture || !selection || gesture.id !== event.pointerId || selectionAIBusy(selection)) return false;
     const point = clientPoint(event);
     if (gesture.hit === "lasso") {
-      const samples = typeof event.getCoalescedEvents === "function" ? event.getCoalescedEvents() : [],
-        events = samples.length ? samples : [event],
-        minimumDistance = 0.75 / Math.max(0.03, state.scale);
-      for (const sample of events) addLassoPoint(selection, SELECT.clipPoint(clientPoint(sample), SIZE), minimumDistance);
-      selection.box = SELECT.polygonBounds(selection.points, SIZE);
+      if (selection.shape === "rect") {
+        selection.points = rectanglePoints(selection.startPoint, point);
+        selection.box = SELECT.polygonBounds(selection.points, SIZE);
+      } else {
+        const samples = typeof event.getCoalescedEvents === "function" ? event.getCoalescedEvents() : [],
+          events = samples.length ? samples : [event],
+          minimumDistance = 0.75 / Math.max(0.03, state.scale);
+        for (const sample of events) addLassoPoint(selection, SELECT.clipPoint(clientPoint(sample), SIZE), minimumDistance);
+        selection.box = SELECT.polygonBounds(selection.points, SIZE);
+      }
     } else if (gesture.hit === "move") selection.box = SELECT.moveBox(gesture.startBox, point.x - gesture.startPoint.x, point.y - gesture.startPoint.y, SIZE);
     else if (gesture.hit === "resize") selection.box = SELECT.resizeBox(gesture.startBox, point, 24 / state.scale, SIZE);
     else if (gesture.hit === "width" || gesture.hit === "height") selection.box = SELECT.resizeBoxAxis(gesture.startBox, point, gesture.hit, 24 / state.scale, SIZE);
@@ -1426,8 +1445,11 @@
     resetCanvasCursor();
     if (gesture.hit === "lasso") {
       if (selection && event.type !== "pointercancel") {
-        const point = SELECT.clipPoint(clientPoint(event), SIZE);
-        addLassoPoint(selection, point, 0.5 / state.scale);
+        if (selection.shape === "rect") selection.points = rectanglePoints(selection.startPoint, clientPoint(event));
+        else {
+          const point = SELECT.clipPoint(clientPoint(event), SIZE);
+          addLassoPoint(selection, point, 0.5 / state.scale);
+        }
       }
       const points = selection?.points || [];
       state.selection = null;

@@ -155,6 +155,17 @@
       beginImageGesture(e, point, selectedImageResult);
       return;
     }
+    // Dragging an image body moves it freely; pan still works on blank paper.
+    if (valid(point)) {
+      const draggedImage = imageAtPoint(point);
+      if (draggedImage && e.pointerType !== "touch" && beginImageDrag(e, point, draggedImage)) return;
+      // Blank paper (or a click elsewhere) ends image edit mode — the retired
+      // side bar no longer provides the "Place image" action.
+      if (!draggedImage && state.imageEdit && !textBoxAtPoint(point)) {
+        acceptImageEdit();
+        return;
+      }
+    }
     if (valid(point)) {
       const animationResult = animationPointerHit(point, e.pointerType);
       if (animationResult && animationResult.hit !== "move") {
@@ -318,7 +329,57 @@
     state.pointerPreview = null;
     requestInteractionLayerRender();
   });
-  screen.addEventListener("contextmenu", (e) => e.preventDefault());
+  // Right-click opens actions for whatever sits under the pointer (images).
+  const objectContextMenu = document.querySelector("#objectContextMenu");
+  function hideObjectContextMenu() {
+    if (objectContextMenu.hidden) return;
+    objectContextMenu.hidden = true;
+    objectContextMenu.replaceChildren();
+  }
+  function addContextMenuItem(label, action, className = "") {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `object-context-item${className ? ` ${className}` : ""}`;
+    button.setAttribute("role", "menuitem");
+    button.textContent = label;
+    button.addEventListener("click", () => {
+      hideObjectContextMenu();
+      action();
+    });
+    objectContextMenu.appendChild(button);
+  }
+  function showObjectContextMenu(event) {
+    const rect = view.getBoundingClientRect(),
+      width = objectContextMenu.offsetWidth || 180,
+      height = objectContextMenu.offsetHeight || 120,
+      left = Math.max(6, Math.min(rect.width - width - 6, event.clientX - rect.left)),
+      top = Math.max(6, Math.min(rect.height - height - 6, event.clientY - rect.top)),
+      style = runtimeElementStyle(objectContextMenu, "object-context-menu");
+    style?.setProperty("--object-context-x", `${left.toFixed(0)}px`);
+    style?.setProperty("--object-context-y", `${top.toFixed(0)}px`);
+  }
+  screen.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    hideObjectContextMenu();
+    const point = clientPoint(event),
+      item = valid(point) ? imageAtPoint(point) : null;
+    if (!item) return;
+    if (item.model) addContextMenuItem(t("modelView"), () => openModelViewer(item));
+    addContextMenuItem(t("imageEditMenu"), () => {
+      enterManualImageHandMode();
+      beginImageEdit(item);
+    });
+    addContextMenuItem(t("imageMerge"), () => mergeImage(item));
+    addContextMenuItem(t("imageDelete"), () => deleteImage(item), "danger");
+    objectContextMenu.hidden = false;
+    showObjectContextMenu(event);
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (!objectContextMenu.contains(event.target)) hideObjectContextMenu();
+  }, true);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") hideObjectContextMenu();
+  });
   view.addEventListener(
     "wheel",
     (e) => {
@@ -435,9 +496,25 @@
   });
   imagePickerInput.addEventListener("change", () => {
     const file = imagePickerInput.files?.[0];
-    if (file) void addImageFile(file);
+    if (file) void (isModelFile(file) ? addModelFile(file) : isPdfFile(file) ? addPdfFile(file) : addImageFile(file));
     else imagePickerInput.value = "";
   });
+  const rectSelectToggle = document.querySelector("#rectSelectToggleBtn");
+  function syncSelectionShape() {
+    if (!rectSelectToggle) return;
+    const rect = state.selectionShape === "rect";
+    rectSelectToggle.classList.toggle("active", rect);
+    rectSelectToggle.setAttribute("aria-pressed", String(rect));
+    const title = t(rect ? "selectionShapeRect" : "selectionShapeLasso");
+    rectSelectToggle.title = title;
+    rectSelectToggle.setAttribute("aria-label", title);
+  }
+  if (rectSelectToggle) rectSelectToggle.onclick = () => {
+    state.selectionShape = state.selectionShape === "rect" ? "lasso" : "rect";
+    syncSelectionShape();
+    setStatusKey(state.selectionShape === "rect" ? "selectionShapeRect" : "selectionShapeLasso");
+  };
+  syncSelectionShape();
   function clipboardTextEditorPoint() {
     const rect = view.getBoundingClientRect(),
       scale = Math.max(0.03, state.scale),
@@ -481,6 +558,14 @@
     return true;
   }
   async function importClipboardPayload(payload) {
+    if (payload?.model instanceof Blob) {
+      await addModelFile(payload.model);
+      return true;
+    }
+    if (payload?.pdf instanceof Blob) {
+      await addPdfFile(payload.pdf);
+      return true;
+    }
     if (payload?.image instanceof Blob) {
       await addImageFile(payload.image);
       return true;
@@ -495,6 +580,10 @@
       itemImage = [...(data.items || [])].find((item) => String(item.type || "").toLowerCase().startsWith("image/")),
       image = files.find((file) => String(file.type || "").toLowerCase().startsWith("image/")) || itemImage?.getAsFile?.() || null;
     if (image) return { image };
+    const pdf = files.find(isPdfFile) || null;
+    if (pdf) return { pdf };
+    const model = files.find(isModelFile) || null;
+    if (model) return { model };
     const text = data.getData?.("text/plain") || "";
     return text ? { text } : null;
   }
@@ -536,6 +625,18 @@
     if (editableClipboardTarget(event.target)) return;
     event.preventDefault();
     void importClipboardPayload(clipboardPayloadFromDataTransfer(event.clipboardData));
+  });
+  // Drag-and-drop imports: PDFs and images land on the board like pasted files.
+  document.addEventListener("dragover", (event) => {
+    if (editableClipboardTarget(event.target)) return;
+    event.preventDefault();
+  });
+  document.addEventListener("drop", (event) => {
+    if (editableClipboardTarget(event.target)) return;
+    const payload = clipboardPayloadFromDataTransfer(event.dataTransfer);
+    if (!payload) return;
+    event.preventDefault();
+    void importClipboardPayload(payload);
   });
   if (selectionTypesetButton) selectionTypesetButton.onclick = normalizeSelectionForAI;
   if (selectionDeleteButton) selectionDeleteButton.onclick = deleteSelection;
