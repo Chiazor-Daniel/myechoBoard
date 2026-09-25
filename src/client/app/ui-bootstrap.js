@@ -510,7 +510,14 @@
     rectSelectToggle.setAttribute("aria-label", title);
   }
   if (rectSelectToggle) rectSelectToggle.onclick = () => {
-    state.selectionShape = state.selectionShape === "rect" ? "lasso" : "rect";
+    // The rectangle tool works from any mode: entering select mode with the
+    // rectangle shape is a single click, no need to arm the lasso first.
+    if (state.mode !== "select") {
+      state.selectionShape = "rect";
+      setCanvasMode("select");
+    } else {
+      state.selectionShape = state.selectionShape === "rect" ? "lasso" : "rect";
+    }
     syncSelectionShape();
     setStatusKey(state.selectionShape === "rect" ? "selectionShapeRect" : "selectionShapeLasso");
   };
@@ -1120,4 +1127,6 @@
   refreshSnapshots().catch(() => {});
   fit();
   setNavigating(true);
+  // Show the one-time feature guide (or its new steps after an update).
+  setTimeout(() => maybeStartOnboarding(), 600);
 })();

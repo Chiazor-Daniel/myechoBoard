@@ -1301,6 +1301,7 @@
     if (!selectionOverlayLayer || !selectionToolbar) return;
     const selection = state.selection,
       active = selection?.phase === "active";
+    syncAiOrbAvailability();
     selectionOverlayLayer.hidden = !active;
     selectionOverlayLayer.setAttribute("aria-hidden", String(!active));
     if (!active) return;

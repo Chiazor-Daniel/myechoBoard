@@ -1,6 +1,6 @@
-# Local test stack: myechoBoard app + Ollama with host .ollama data mounted.
-# This is ONLY for local testing. In production/Dokploy use docker-compose.dokploy.yml
-# with a persistent named volume.
+# Local test stack: myechoBoard + Ollama using the host's authenticated Ollama session.
+# On this local machine, the host Ollama service stores data under /usr/share/ollama/.ollama.
+# On your Dokploy host, change the bind mount to ~/.ollama.
 
 services:
   ollama:
@@ -8,32 +8,28 @@ services:
     container_name: ollama-test
     restart: "no"
     volumes:
-      # Adjust this path to your host Ollama models directory.
       - /usr/share/ollama/.ollama:/root/.ollama:ro
     networks:
       - echoboard-test-net
-    healthcheck:
-      test: ["CMD", "sh", "-c", "ollama list >/dev/null 2>&1 || exit 1"]
-      interval: 10s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
 
   echoboard:
     image: buzz3r/echoboard:latest
     container_name: echoboard-test
     restart: "no"
     depends_on:
-      ollama:
-        condition: service_healthy
+      - ollama
     environment:
-      AI_PROVIDER: ollama
-      OLLAMA_HOST: http://ollama-test:11434
-      OLLAMA_MODEL: gemma3:4b
-      PENECHO_FRAME_ANCESTORS: "http://localhost:9000 https://myecho.edustartech.com/"
-      PENECHO_LOCAL_ACCESS_MODE: open
       HOST: 0.0.0.0
       PORT: 8080
+      AI_PROVIDER: ollama
+      OLLAMA_HOST: http://ollama-test:11434
+      OLLAMA_MODEL: gemma4:31b-cloud
+      PENECHO_AI_IMAGE_FORMAT: png
+      AI_TIMEOUT_SECONDS: 300
+      AUTO_AI_DELAY_SECONDS: 5
+      PENECHO_REQUEST_TRACE: false
+      PENECHO_FRAME_ANCESTORS: "http://localhost:9000 https://myecho.edustartech.com/"
+      PENECHO_LOCAL_ACCESS_MODE: open
     networks:
       - echoboard-test-net
     ports:

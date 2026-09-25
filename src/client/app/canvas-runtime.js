@@ -591,6 +591,22 @@
     }
   }
   const PDF_MAX_PAGES = 20;
+  const pdfLoadingOverlay = document.querySelector("#pdfLoadingOverlay"),
+    pdfLoadingText = document.querySelector("#pdfLoadingText"),
+    pdfLoadingProgress = document.querySelector("#pdfLoadingProgress");
+  function showPdfLoading(fileName) {
+    if (!pdfLoadingOverlay) return;
+    const name = String(fileName || "").replace(/\.pdf$/i, "").slice(0, 60);
+    pdfLoadingText.textContent = name ? `${t("pdfLoading")} · ${name}` : t("pdfLoading");
+    pdfLoadingProgress.textContent = "";
+    pdfLoadingOverlay.hidden = false;
+  }
+  function setPdfProgress(done, total) {
+    if (pdfLoadingProgress && total > 1) pdfLoadingProgress.textContent = t("pdfPageProgress").replace("{done}", done).replace("{total}", total);
+  }
+  function hidePdfLoading() {
+    if (pdfLoadingOverlay) pdfLoadingOverlay.hidden = true;
+  }
   function isPdfFile(file) {
     return file instanceof Blob && (String(file.type || "").toLowerCase() === "application/pdf" || /\.pdf$/i.test(String(file.name || "")));
   }
@@ -613,6 +629,7 @@
     }
     const pageCount = Math.min(pdfDocument.numPages, PDF_MAX_PAGES),
       prepared = [];
+    setPdfProgress(0, pageCount);
     for (let number = 1; number <= pageCount; number++) {
       const page = await pdfDocument.getPage(number),
         base = page.getViewport({ scale: 1 }),
@@ -630,6 +647,7 @@
       canvas.width = canvas.height = 1;
       if (!blob || blob.size <= 0 || blob.size > MAX_IMAGE_SOURCE_BYTES) throw imageImportError("imageTooLarge");
       prepared.push({ blob, image:await imageFromBlob(blob), naturalW:width, naturalH:height });
+      setPdfProgress(number, pageCount);
     }
     return prepared;
   }
@@ -666,6 +684,7 @@
     state.imageImporting = true;
     imagePickerButton.disabled = true;
     setStatusKey("pdfLoading");
+    showPdfLoading(file?.name);
     try {
       const preparedPages = await prepareImportedPdf(file);
       if (expectedIdentityGeneration !== canvasIdentityGeneration()) return;
@@ -712,6 +731,7 @@
       state.imageImporting = false;
       imagePickerButton.disabled = false;
       imagePickerInput.value = "";
+      hidePdfLoading();
     }
   }
   const MODEL_MAX_BYTES = 20 * 1024 * 1024;

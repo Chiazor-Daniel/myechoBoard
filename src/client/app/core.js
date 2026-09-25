@@ -210,7 +210,9 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       textEmpty: "Enter some text first",
       textMixedModeError: "Mixed formatting was unavailable; plain text was inserted",
       textHelp: "Text formatting help",
-      addImage: "Add image, photo, or PDF",
+      addImage: "Upload image, PDF, or 3D model — drag & drop works too",
+      uploadFiles: "Upload",
+      highlightFirst: "Highlight an area with the lasso or rectangle select first — the AI works only on what you highlight.",
       copyFromClipboard: "Copy text or image from clipboard",
       clipboardReading: "Reading clipboard...",
       clipboardTextAdded: "Clipboard text added. Move or resize the text box, then confirm.",
@@ -222,6 +224,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       selectionShapeLasso: "Lasso selection: draw around the ink",
       selectionShapeRect: "Rectangle selection: drag a box around the area",
       pdfLoading: "Preparing PDF pages...",
+      pdfPageProgress: "Page {done} of {total}",
       pdfAdded: "PDF pages added. Highlight with ink or lasso a region, then ask the AI.",
       pdfUnsupported: "This PDF could not be opened",
       modelLoading: "Preparing 3D model...",
@@ -336,6 +339,12 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       tourFilesBody: "New starts a clean canvas and offers to save confirmed work first. Download exports all visible ink as a cropped PNG. History opens local snapshots, where you can name, save, reload, or delete canvases. Unconfirmed AI drafts are not saved.",
       tourManualAITitle: "Ask AI for a specific kind of help",
       tourManualAIBody: "Click the magic orb to open manual AI actions such as Answer, Hint, Continue, Explain, and Plot. Manual requests use the current canvas context—or only the lasso selection when one is active.",
+      tourUploadTitle: "Upload anything onto the board",
+      tourUploadBody: "Use the Upload button or drag & drop files straight onto the board: images, photos, whole PDFs, and even 3D models (.glb / .gltf). Right-click a 3D model to open its interactive 3D view.",
+      tourRectTitle: "Rectangle selection",
+      tourRectBody: "Prefer boxes over drawing? Click the dashed-rectangle tool once — it switches to selection with a rectangle. Click it again to go back to the lasso.",
+      tourHighlightAITitle: "Highlight first, then ask the AI",
+      tourHighlightAIBody: "Whatever is on the board — ink, a PDF region, a photo, text — highlight it with the lasso or rectangle and the AI works on exactly that and nothing else. The AI orb lights up only after you highlight something.",
       tourStatusTitle: "Follow every AI request and result",
       tourStatusBody: "This status indicator reports when AI is observing, writing, finished, delayed, or needs confirmation. When a multi-part draft is ready, nearby controls let you accept or discard the complete response.",
       tourCanvasTitle: "Navigate the large canvas",
@@ -794,6 +803,9 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     { id: "core-fullscreen-v1", targets: ["#fullscreenBtn"], titleKey: "tourFullscreenTitle", bodyKey: "tourFullscreenBody", placement: "bottom", radius: 7 },
     { id: "core-files-v1", targets: ["#canvasFileActions"], titleKey: "tourFilesTitle", bodyKey: "tourFilesBody", placement: "bottom", radius: 8 },
     { id: "core-manual-ai-v1", targets: ["#aiOrb"], titleKey: "tourManualAITitle", bodyKey: "tourManualAIBody", placement: "left", radius: 50 },
+    { id: "upload-files-v1", targets: ["#imagePickerBtn"], titleKey: "tourUploadTitle", bodyKey: "tourUploadBody", placement: "bottom", radius: 8 },
+    { id: "rect-select-v1", targets: ["#rectSelectToggleBtn"], titleKey: "tourRectTitle", bodyKey: "tourRectBody", placement: "bottom", radius: 7 },
+    { id: "highlight-ai-v1", targets: ["#aiOrb"], titleKey: "tourHighlightAITitle", bodyKey: "tourHighlightAIBody", placement: "left", radius: 50 },
     { id: "core-status-v1", targets: ["#aiStatusArea"], titleKey: "tourStatusTitle", bodyKey: "tourStatusBody", placement: "bottom", radius: 999 },
     { id: "core-navigation-v1", targets: ["#viewport"], titleKey: "tourCanvasTitle", bodyKey: "tourCanvasBody", placement: "center", radius: 10, padding: 5 },
   ]);
@@ -2367,7 +2379,19 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     supersedeActiveAI("manual-action");
     requestAI(action, null, { captureCurrentViewport: true });
   }
+  function syncAiOrbAvailability() {
+    // The AI works only on a highlighted region, so the orb stays greyed out
+    // until the user has an active lasso/rectangle selection.
+    const unlocked = state.selection?.phase === "active";
+    embodiment.classList.toggle("ai-locked", !unlocked);
+    aiOrb.setAttribute("aria-disabled", String(!unlocked));
+  }
   function openRadialMenu() {
+    if (state.selection?.phase !== "active") {
+      closeRadialMenu();
+      setStatusKey("highlightFirst");
+      return;
+    }
     clearTimeout(state.radialCloseTimer);
     embodiment.classList.add("menu-open");
     aiOrb.setAttribute("aria-expanded", "true");

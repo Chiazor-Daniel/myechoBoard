@@ -32,7 +32,7 @@ Prefer `diagram_source` whenever one of these built-in local renderers faithfull
 - `bpmn-xml`: complete BPMN 2.0 XML, including diagram geometry, for business processes, events, gateways, tasks, pools and lanes.
 - `vega-lite`: complete Vega-Lite JSON for statistical, scientific, financial, operational and comparative charts.
 - `geojson`: complete WGS84 GeoJSON for maps, routes, regions, geographic features and spatial topology; never pre-shift coordinates for a basemap.
-- `smiles`: valid SMILES for a locally rendered 2D molecular structure.
+- `smiles`: valid SMILES for a locally rendered 2D molecular structure. Any named compound, organic or biochemical structure — ring systems, functional groups, skeletal formulas, reaction products — always uses `smiles` with a chemically valid SMILES string; never hand-draw atoms, bonds or rings in SVG or HTML when the request is a molecular structure.
 - `cytoscape-json`: complete Cytoscape elements JSON for biological pathways, clinical or causal networks, dependency networks and other node-link systems.
 
 Return:
@@ -54,7 +54,7 @@ Common direct-HTML choices include:
 - DBML or SQL DDL for database schemas and ER models.
 - draw.io XML for broadly editable engineering, software and business diagrams.
 - Excalidraw JSON for editable sketch-style technical diagrams.
-- KiCad schematic source or SPICE netlists for electrical and electronic engineering.
+- KiCad schematic source or SPICE netlists for electrical and electronic engineering. When drawing a schematic view of any circuit, use standard symbols — battery cells, resistor zigzag or IEC rectangle, switch blade with its pivot and contact dots, capacitor plates, lamps, grounds — every symbol fully drawn on its conductor; a wire gap without a symbol reads as a broken circuit and is never acceptable.
 - WaveDrom JSON for digital timing diagrams, signals, registers and protocols.
 - Other established professional source for control and signal systems, mechanics and assemblies, optics and apparatus, chemical reactions and processes, biological pathways, medical devices and clinical paths, financial flows and risk, causal graphs, networks, geography, or another specialist field.
 

@@ -25,3 +25,14 @@ tools/mobile/android/
 tools/mobile/ios/
 tools/mobile/web/penecho-mark.png
 .playwright-mcp/
+
+# Ollama build-context staging (contains auth keys — never commit)
+.ollama/
+.ollama-host/
+.ollama-host-bin/
+
+# local e2e test artifacts
+/*.png
+/*.pdf
+/s11-snapshot.yml
+/u10-last-plot-body.json

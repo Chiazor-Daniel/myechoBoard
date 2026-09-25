@@ -1,8 +1,9 @@
 # syntax=docker/dockerfile:1
 
-# Multi-stage build for a small, self-contained myechoBoard app image.
-# Designed to pair with a separate Ollama service (split deployment).
-# Deploy to Dokploy, Google Cloud Run, Cloud Engine, or any container host.
+# Self-contained myechoBoard image with Ollama bundled.
+# Copies the Ollama binary and libraries from the official ollama/ollama:latest
+# image to avoid downloading via install.sh. The full host Ollama directory
+# (including authenticated session, cache, and models) is injected at build time.
 
 FROM node:22-slim AS builder
 
@@ -19,6 +20,9 @@ RUN npm ci --omit=dev
 COPY . .
 RUN npm run build:client
 
+# --- Ollama source stage ---
+FROM ollama/ollama:latest AS ollama
+
 # --- Runtime image ---
 FROM node:22-slim
 
@@ -29,6 +33,18 @@ ENV NODE_ENV=production
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libvips42 ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# Copy Ollama binary and libraries from the host copy (matching the host's
+# authenticated Ollama version).
+COPY .ollama-host-bin/ollama /usr/local/bin/ollama
+COPY .ollama-host-bin/lib /usr/local/lib/ollama
+
+# Copy the entire authenticated Ollama directory from the build context.
+# This includes id_ed25519, config, cache, and models.
+# The build context is populated by scripts/build-ollama-image.sh and cleaned
+# up immediately after the build.
+COPY .ollama /root/.ollama
+RUN chmod 600 /root/.ollama/id_ed25519
 
 # Copy only what the production server needs.
 COPY --from=builder /app/node_modules ./node_modules
@@ -46,14 +62,16 @@ COPY --from=builder /app/CONTRIBUTING.md ./
 COPY --from=builder /app/CONTRIBUTOR-LICENSE-AGREEMENT.md ./
 COPY --from=builder /app/TRADEMARKS.md ./
 COPY --from=builder /app/COMMERCIAL-LICENSE.md ./
+COPY --from=builder /app/docker-entrypoint.sh ./
+RUN chmod +x ./docker-entrypoint.sh
 
-# Dokploy / Cloud Run default; override with --env PORT=... or docker run -e PORT=3888
 ENV HOST=0.0.0.0
 ENV PORT=8080
+ENV OLLAMA_HOST=http://localhost:11434
 
 EXPOSE 8080
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
   CMD node -e "fetch('http://localhost:' + (process.env.PORT || 8080) + '/health').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"
 
-CMD ["node", "server.js"]
+CMD ["./docker-entrypoint.sh"]

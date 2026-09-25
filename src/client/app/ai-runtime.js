@@ -858,7 +858,7 @@
           y = c.y,
           pendingCommand = c;
         if (c.tool === "write_text") {
-          image = textImage(c.text, c.fontSize, c.color, c.maxWidth, c.lineHeight, state.aiFont, AI_TEXT_MAX_LENGTH, sharpRenderRatio());
+          image = await aiTextImage(c.text, c.fontSize, c.color, c.maxWidth, c.lineHeight);
         } else if (c.tool === "draw_formula") {
           image = await formulaImage(c.latex, c.fontSize, c.color);
         } else if (c.tool === "plot_function") {
@@ -900,7 +900,7 @@
       x = c.x,
       y = c.y,
       pendingCommand = c;
-    if (c.tool === "write_text") image = textImage(c.text, c.fontSize, c.color, c.maxWidth, c.lineHeight, state.aiFont, AI_TEXT_MAX_LENGTH, sharpRenderRatio());
+    if (c.tool === "write_text") image = await aiTextImage(c.text, c.fontSize, c.color, c.maxWidth, c.lineHeight);
     else if (c.tool === "draw_formula") image = await formulaImage(c.latex, c.fontSize, c.color);
     else if (c.tool === "plot_function") image = plot(c);
     else if (c.tool === "animate_scene") {
@@ -1136,6 +1136,21 @@
     image.revealRows = rows.map((row) => Math.max(1, row.width));
     image.revealRowHeight = naturalHeight / Math.max(1, rows.length);
     return image;
+  }
+  async function aiTextImage(text, fontSize, color, maxWidth, lineHeight, pixelRatio = sharpRenderRatio()) {
+    if (MIXED_TEXT?.parse) return mixedTextImage(String(text ?? "").slice(0, AI_TEXT_MAX_LENGTH), fontSize, color, maxWidth, lineHeight, state.aiFont, pixelRatio);
+    return textImage(text, fontSize, color, maxWidth, lineHeight, state.aiFont, AI_TEXT_MAX_LENGTH, pixelRatio);
+  }
+  function scheduleAiTextRerender(target, width) {
+    const command = target.textCommand;
+    if (!command) return;
+    const token = (target.textRenderToken = (target.textRenderToken || 0) + 1);
+    aiTextImage(command.text, command.fontSize, command.color, width, command.lineHeight).then((image) => {
+      if (target.textRenderToken !== token) return;
+      target.image = image;
+      if (!target.heightLocked) target.layoutHeight = image.logicalHeight || image.height;
+      render();
+    }).catch(() => {});
   }
   async function mathJaxImage(latex, fontSize, color, pixelRatio = sharpRenderRatio()) {
     if (!window.MathJax?.tex2svgPromise) return { image: null, error: Error("MathJax unavailable") };
@@ -2126,8 +2141,7 @@
         if (item.textCommand) {
           const layoutWidth=Math.max(item.textCommand.fontSize,Math.min((SIZE-item.x)/item.scaleX,(q.x-item.x)/item.scaleX));
           item.layoutWidth=layoutWidth;
-          item.image=textImage(item.textCommand.text,item.textCommand.fontSize,item.textCommand.color,item.layoutWidth,item.textCommand.lineHeight);
-          if(!item.heightLocked)item.layoutHeight=item.image.logicalHeight||item.image.height;
+          scheduleAiTextRerender(item, layoutWidth);
         } else {
           const baseWidth = box.w / item.scaleX;
           item.scaleX = Math.max(40 / baseWidth, Math.min((SIZE - item.x) / baseWidth, (q.x - item.x) / baseWidth));
@@ -2161,8 +2175,7 @@
       if (p.textCommand) {
         const layoutWidth=Math.max(p.textCommand.fontSize,Math.min((SIZE-p.x)/p.scaleX,(q.x-p.x)/p.scaleX));
         p.layoutWidth=layoutWidth;
-        p.image=textImage(p.textCommand.text,p.textCommand.fontSize,p.textCommand.color,p.layoutWidth,p.textCommand.lineHeight);
-        if(!p.heightLocked)p.layoutHeight=p.image.logicalHeight||p.image.height;
+        scheduleAiTextRerender(p, layoutWidth);
       } else {
         const baseWidth = draftBounds(p).w / p.scaleX;
         p.scaleX = Math.max(40 / baseWidth, Math.min((SIZE - p.x) / baseWidth, (q.x - p.x) / baseWidth));

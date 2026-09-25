@@ -211,7 +211,9 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       textEmpty: "Enter some text first",
       textMixedModeError: "Mixed formatting was unavailable; plain text was inserted",
       textHelp: "Text formatting help",
-      addImage: "Add image, photo, or PDF",
+      addImage: "Upload image, PDF, or 3D model — drag & drop works too",
+      uploadFiles: "Upload",
+      highlightFirst: "Highlight an area with the lasso or rectangle select first — the AI works only on what you highlight.",
       copyFromClipboard: "Copy text or image from clipboard",
       clipboardReading: "Reading clipboard...",
       clipboardTextAdded: "Clipboard text added. Move or resize the text box, then confirm.",
@@ -223,6 +225,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       selectionShapeLasso: "Lasso selection: draw around the ink",
       selectionShapeRect: "Rectangle selection: drag a box around the area",
       pdfLoading: "Preparing PDF pages...",
+      pdfPageProgress: "Page {done} of {total}",
       pdfAdded: "PDF pages added. Highlight with ink or lasso a region, then ask the AI.",
       pdfUnsupported: "This PDF could not be opened",
       modelLoading: "Preparing 3D model...",
@@ -337,6 +340,12 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       tourFilesBody: "New starts a clean canvas and offers to save confirmed work first. Download exports all visible ink as a cropped PNG. History opens local snapshots, where you can name, save, reload, or delete canvases. Unconfirmed AI drafts are not saved.",
       tourManualAITitle: "Ask AI for a specific kind of help",
       tourManualAIBody: "Click the magic orb to open manual AI actions such as Answer, Hint, Continue, Explain, and Plot. Manual requests use the current canvas context—or only the lasso selection when one is active.",
+      tourUploadTitle: "Upload anything onto the board",
+      tourUploadBody: "Use the Upload button or drag & drop files straight onto the board: images, photos, whole PDFs, and even 3D models (.glb / .gltf). Right-click a 3D model to open its interactive 3D view.",
+      tourRectTitle: "Rectangle selection",
+      tourRectBody: "Prefer boxes over drawing? Click the dashed-rectangle tool once — it switches to selection with a rectangle. Click it again to go back to the lasso.",
+      tourHighlightAITitle: "Highlight first, then ask the AI",
+      tourHighlightAIBody: "Whatever is on the board — ink, a PDF region, a photo, text — highlight it with the lasso or rectangle and the AI works on exactly that and nothing else. The AI orb lights up only after you highlight something.",
       tourStatusTitle: "Follow every AI request and result",
       tourStatusBody: "This status indicator reports when AI is observing, writing, finished, delayed, or needs confirmation. When a multi-part draft is ready, nearby controls let you accept or discard the complete response.",
       tourCanvasTitle: "Navigate the large canvas",
@@ -795,6 +804,9 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     { id: "core-fullscreen-v1", targets: ["#fullscreenBtn"], titleKey: "tourFullscreenTitle", bodyKey: "tourFullscreenBody", placement: "bottom", radius: 7 },
     { id: "core-files-v1", targets: ["#canvasFileActions"], titleKey: "tourFilesTitle", bodyKey: "tourFilesBody", placement: "bottom", radius: 8 },
     { id: "core-manual-ai-v1", targets: ["#aiOrb"], titleKey: "tourManualAITitle", bodyKey: "tourManualAIBody", placement: "left", radius: 50 },
+    { id: "upload-files-v1", targets: ["#imagePickerBtn"], titleKey: "tourUploadTitle", bodyKey: "tourUploadBody", placement: "bottom", radius: 8 },
+    { id: "rect-select-v1", targets: ["#rectSelectToggleBtn"], titleKey: "tourRectTitle", bodyKey: "tourRectBody", placement: "bottom", radius: 7 },
+    { id: "highlight-ai-v1", targets: ["#aiOrb"], titleKey: "tourHighlightAITitle", bodyKey: "tourHighlightAIBody", placement: "left", radius: 50 },
     { id: "core-status-v1", targets: ["#aiStatusArea"], titleKey: "tourStatusTitle", bodyKey: "tourStatusBody", placement: "bottom", radius: 999 },
     { id: "core-navigation-v1", targets: ["#viewport"], titleKey: "tourCanvasTitle", bodyKey: "tourCanvasBody", placement: "center", radius: 10, padding: 5 },
   ]);
@@ -2368,7 +2380,19 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     supersedeActiveAI("manual-action");
     requestAI(action, null, { captureCurrentViewport: true });
   }
+  function syncAiOrbAvailability() {
+    // The AI works only on a highlighted region, so the orb stays greyed out
+    // until the user has an active lasso/rectangle selection.
+    const unlocked = state.selection?.phase === "active";
+    embodiment.classList.toggle("ai-locked", !unlocked);
+    aiOrb.setAttribute("aria-disabled", String(!unlocked));
+  }
   function openRadialMenu() {
+    if (state.selection?.phase !== "active") {
+      closeRadialMenu();
+      setStatusKey("highlightFirst");
+      return;
+    }
     clearTimeout(state.radialCloseTimer);
     embodiment.classList.add("menu-open");
     aiOrb.setAttribute("aria-expanded", "true");
@@ -3014,6 +3038,22 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     }
   }
   const PDF_MAX_PAGES = 20;
+  const pdfLoadingOverlay = document.querySelector("#pdfLoadingOverlay"),
+    pdfLoadingText = document.querySelector("#pdfLoadingText"),
+    pdfLoadingProgress = document.querySelector("#pdfLoadingProgress");
+  function showPdfLoading(fileName) {
+    if (!pdfLoadingOverlay) return;
+    const name = String(fileName || "").replace(/\.pdf$/i, "").slice(0, 60);
+    pdfLoadingText.textContent = name ? `${t("pdfLoading")} · ${name}` : t("pdfLoading");
+    pdfLoadingProgress.textContent = "";
+    pdfLoadingOverlay.hidden = false;
+  }
+  function setPdfProgress(done, total) {
+    if (pdfLoadingProgress && total > 1) pdfLoadingProgress.textContent = t("pdfPageProgress").replace("{done}", done).replace("{total}", total);
+  }
+  function hidePdfLoading() {
+    if (pdfLoadingOverlay) pdfLoadingOverlay.hidden = true;
+  }
   function isPdfFile(file) {
     return file instanceof Blob && (String(file.type || "").toLowerCase() === "application/pdf" || /\.pdf$/i.test(String(file.name || "")));
   }
@@ -3036,6 +3076,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     }
     const pageCount = Math.min(pdfDocument.numPages, PDF_MAX_PAGES),
       prepared = [];
+    setPdfProgress(0, pageCount);
     for (let number = 1; number <= pageCount; number++) {
       const page = await pdfDocument.getPage(number),
         base = page.getViewport({ scale: 1 }),
@@ -3053,6 +3094,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       canvas.width = canvas.height = 1;
       if (!blob || blob.size <= 0 || blob.size > MAX_IMAGE_SOURCE_BYTES) throw imageImportError("imageTooLarge");
       prepared.push({ blob, image:await imageFromBlob(blob), naturalW:width, naturalH:height });
+      setPdfProgress(number, pageCount);
     }
     return prepared;
   }
@@ -3089,6 +3131,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     state.imageImporting = true;
     imagePickerButton.disabled = true;
     setStatusKey("pdfLoading");
+    showPdfLoading(file?.name);
     try {
       const preparedPages = await prepareImportedPdf(file);
       if (expectedIdentityGeneration !== canvasIdentityGeneration()) return;
@@ -3135,6 +3178,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       state.imageImporting = false;
       imagePickerButton.disabled = false;
       imagePickerInput.value = "";
+      hidePdfLoading();
     }
   }
   const MODEL_MAX_BYTES = 20 * 1024 * 1024;
@@ -7306,6 +7350,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     if (!selectionOverlayLayer || !selectionToolbar) return;
     const selection = state.selection,
       active = selection?.phase === "active";
+    syncAiOrbAvailability();
     selectionOverlayLayer.hidden = !active;
     selectionOverlayLayer.setAttribute("aria-hidden", String(!active));
     if (!active) return;
@@ -8351,7 +8396,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
           y = c.y,
           pendingCommand = c;
         if (c.tool === "write_text") {
-          image = textImage(c.text, c.fontSize, c.color, c.maxWidth, c.lineHeight, state.aiFont, AI_TEXT_MAX_LENGTH, sharpRenderRatio());
+          image = await aiTextImage(c.text, c.fontSize, c.color, c.maxWidth, c.lineHeight);
         } else if (c.tool === "draw_formula") {
           image = await formulaImage(c.latex, c.fontSize, c.color);
         } else if (c.tool === "plot_function") {
@@ -8393,7 +8438,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       x = c.x,
       y = c.y,
       pendingCommand = c;
-    if (c.tool === "write_text") image = textImage(c.text, c.fontSize, c.color, c.maxWidth, c.lineHeight, state.aiFont, AI_TEXT_MAX_LENGTH, sharpRenderRatio());
+    if (c.tool === "write_text") image = await aiTextImage(c.text, c.fontSize, c.color, c.maxWidth, c.lineHeight);
     else if (c.tool === "draw_formula") image = await formulaImage(c.latex, c.fontSize, c.color);
     else if (c.tool === "plot_function") image = plot(c);
     else if (c.tool === "animate_scene") {
@@ -8629,6 +8674,21 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     image.revealRows = rows.map((row) => Math.max(1, row.width));
     image.revealRowHeight = naturalHeight / Math.max(1, rows.length);
     return image;
+  }
+  async function aiTextImage(text, fontSize, color, maxWidth, lineHeight, pixelRatio = sharpRenderRatio()) {
+    if (MIXED_TEXT?.parse) return mixedTextImage(String(text ?? "").slice(0, AI_TEXT_MAX_LENGTH), fontSize, color, maxWidth, lineHeight, state.aiFont, pixelRatio);
+    return textImage(text, fontSize, color, maxWidth, lineHeight, state.aiFont, AI_TEXT_MAX_LENGTH, pixelRatio);
+  }
+  function scheduleAiTextRerender(target, width) {
+    const command = target.textCommand;
+    if (!command) return;
+    const token = (target.textRenderToken = (target.textRenderToken || 0) + 1);
+    aiTextImage(command.text, command.fontSize, command.color, width, command.lineHeight).then((image) => {
+      if (target.textRenderToken !== token) return;
+      target.image = image;
+      if (!target.heightLocked) target.layoutHeight = image.logicalHeight || image.height;
+      render();
+    }).catch(() => {});
   }
   async function mathJaxImage(latex, fontSize, color, pixelRatio = sharpRenderRatio()) {
     if (!window.MathJax?.tex2svgPromise) return { image: null, error: Error("MathJax unavailable") };
@@ -9619,8 +9679,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
         if (item.textCommand) {
           const layoutWidth=Math.max(item.textCommand.fontSize,Math.min((SIZE-item.x)/item.scaleX,(q.x-item.x)/item.scaleX));
           item.layoutWidth=layoutWidth;
-          item.image=textImage(item.textCommand.text,item.textCommand.fontSize,item.textCommand.color,item.layoutWidth,item.textCommand.lineHeight);
-          if(!item.heightLocked)item.layoutHeight=item.image.logicalHeight||item.image.height;
+          scheduleAiTextRerender(item, layoutWidth);
         } else {
           const baseWidth = box.w / item.scaleX;
           item.scaleX = Math.max(40 / baseWidth, Math.min((SIZE - item.x) / baseWidth, (q.x - item.x) / baseWidth));
@@ -9654,8 +9713,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       if (p.textCommand) {
         const layoutWidth=Math.max(p.textCommand.fontSize,Math.min((SIZE-p.x)/p.scaleX,(q.x-p.x)/p.scaleX));
         p.layoutWidth=layoutWidth;
-        p.image=textImage(p.textCommand.text,p.textCommand.fontSize,p.textCommand.color,p.layoutWidth,p.textCommand.lineHeight);
-        if(!p.heightLocked)p.layoutHeight=p.image.logicalHeight||p.image.height;
+        scheduleAiTextRerender(p, layoutWidth);
       } else {
         const baseWidth = draftBounds(p).w / p.scaleX;
         p.scaleX = Math.max(40 / baseWidth, Math.min((SIZE - p.x) / baseWidth, (q.x - p.x) / baseWidth));
@@ -10699,7 +10757,14 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
     rectSelectToggle.setAttribute("aria-label", title);
   }
   if (rectSelectToggle) rectSelectToggle.onclick = () => {
-    state.selectionShape = state.selectionShape === "rect" ? "lasso" : "rect";
+    // The rectangle tool works from any mode: entering select mode with the
+    // rectangle shape is a single click, no need to arm the lasso first.
+    if (state.mode !== "select") {
+      state.selectionShape = "rect";
+      setCanvasMode("select");
+    } else {
+      state.selectionShape = state.selectionShape === "rect" ? "lasso" : "rect";
+    }
     syncSelectionShape();
     setStatusKey(state.selectionShape === "rect" ? "selectionShapeRect" : "selectionShapeLasso");
   };
@@ -11309,4 +11374,6 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
   refreshSnapshots().catch(() => {});
   fit();
   setNavigating(true);
+  // Show the one-time feature guide (or its new steps after an update).
+  setTimeout(() => maybeStartOnboarding(), 600);
 })();
