@@ -124,13 +124,13 @@
       y = Number(item.y),
       fontSize = Number(item.fontSize),
       maxWidth = Number(item.maxWidth);
-    if (![x, y, fontSize, maxWidth].every(Number.isFinite) || x < 0 || y < 0 || fontSize < 1 || fontSize > 2000 || maxWidth < fontSize * 3 || maxWidth > SIZE) return null;
+    if (![x, y, fontSize, maxWidth].every(Number.isFinite) || x < -WORLD_LIMIT || y < -WORLD_LIMIT || fontSize < 1 || fontSize > 2000 || maxWidth < fontSize * 3 || maxWidth > SIZE) return null;
     const color = item.color || state.inkColor,
       fitted = await fittedTextBoxContent(item.text, fontSize, color, maxWidth),
       width = fitted.width,
       height = fitted.height,
-      fittedX = Math.max(0, Math.min(SIZE - width, x)),
-      fittedY = Math.max(0, Math.min(SIZE - height, y));
+      fittedX = Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT - width, x)),
+      fittedY = Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT - height, y));
     if (width <= 0 || height <= 0) return null;
     return {
       id:typeof item.id === "string" && /^text-box-\d+$/.test(item.id) ? item.id : `text-box-${state.nextTextBoxId++}`,
@@ -201,7 +201,7 @@
   }
   function imageRecord(item) {
     if (!item || typeof item !== "object" || !(item.blob instanceof Blob) || !item.image || item.blob.size <= 0 || item.blob.size > MAX_IMAGE_SOURCE_BYTES) return null;
-    if (!n(item.x) || !n(item.y) || !n(item.w, 80) || !n(item.h, 80) || item.x + item.w > SIZE || item.y + item.h > SIZE) return null;
+    if (!n(item.x) || !n(item.y) || !n(item.w, 80) || !n(item.h, 80) || item.x + item.w > WORLD_LIMIT || item.y + item.h > WORLD_LIMIT) return null;
     const naturalW = Number(item.naturalW) || item.image.naturalWidth || item.image.width,
       naturalH = Number(item.naturalH) || item.image.naturalHeight || item.image.height;
     if (!n(naturalW, 1, MAX_IMAGE_DIMENSION) || !n(naturalH, 1, MAX_IMAGE_DIMENSION) || naturalW * naturalH > MAX_IMAGE_PIXELS) return null;
@@ -366,8 +366,8 @@
   }
   function resizeImageBox(start, point, hit) {
     const minimumWidth = 80, minimumHeight = 80,
-      maximumWidth = SIZE - start.x,
-      maximumHeight = SIZE - start.y;
+      maximumWidth = WORLD_LIMIT - start.x,
+      maximumHeight = WORLD_LIMIT - start.y;
     if (hit === "width") return { ...start, w:Math.max(minimumWidth, Math.min(maximumWidth, point.x - start.x)) };
     if (hit === "height") return { ...start, h:Math.max(minimumHeight, Math.min(maximumHeight, point.y - start.y)) };
     const minimumScale = Math.max(minimumWidth / start.w, minimumHeight / start.h),
@@ -414,8 +414,8 @@
     if (!gesture || gesture.id !== event.pointerId) return false;
     const point = clientPoint(event), item = gesture.image;
     if (gesture.hit === "move") {
-      item.x = Math.max(0, Math.min(SIZE - item.w, gesture.start.x + point.x - gesture.startPoint.x));
-      item.y = Math.max(0, Math.min(SIZE - item.h, gesture.start.y + point.y - gesture.startPoint.y));
+      item.x = Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT - item.w, gesture.start.x + point.x - gesture.startPoint.x));
+      item.y = Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT - item.h, gesture.start.y + point.y - gesture.startPoint.y));
     } else Object.assign(item, resizeImageBox(gesture.start, point, gesture.hit));
     gesture.changed = ["x", "y", "w", "h"].some((key) => Math.abs(item[key] - gesture.start[key]) > 0.01);
     requestRender();
@@ -463,10 +463,10 @@
     recordImagesBefore();
     const box = imageBox(item);
     invalidateSharpOverlays(box);
-    const x0 = Math.max(0, Math.floor(box.x / TILE)),
-      y0 = Math.max(0, Math.floor(box.y / TILE)),
-      x1 = Math.min(Math.ceil(SIZE / TILE) - 1, Math.ceil((box.x + box.w) / TILE) - 1),
-      y1 = Math.min(Math.ceil(SIZE / TILE) - 1, Math.ceil((box.y + box.h) / TILE) - 1);
+    const x0 = Math.max(-Math.ceil(WORLD_LIMIT / TILE), Math.floor(box.x / TILE)),
+      y0 = Math.max(-Math.ceil(WORLD_LIMIT / TILE), Math.floor(box.y / TILE)),
+      x1 = Math.min(Math.ceil(WORLD_LIMIT / TILE) - 1, Math.ceil((box.x + box.w) / TILE) - 1),
+      y1 = Math.min(Math.ceil(WORLD_LIMIT / TILE) - 1, Math.ceil((box.y + box.h) / TILE) - 1);
     for (let ty = y0; ty <= y1; ty++)
       for (let tx = x0; tx <= x1; tx++) {
         recordBefore(tx, ty);
@@ -499,15 +499,15 @@
     return true;
   }
   function importedImagePlacement(naturalW, naturalH) {
-    const visible = viewportRect() || { x:0, y:0, w:SIZE, h:SIZE },
+    const visible = viewportRect() || { x:-WORLD_LIMIT, y:-WORLD_LIMIT, w:WORLD_LIMIT * 2, h:WORLD_LIMIT * 2 },
       rect = view.getBoundingClientRect(),
       maxW = Math.max(80, Math.min(6000, visible.w * 0.72, Math.max(240, rect.width * 0.52) / state.scale)),
       maxH = Math.max(80, Math.min(6000, visible.h * 0.72, Math.max(200, rect.height * 0.52) / state.scale)),
       scale = Math.min(maxW / naturalW, maxH / naturalH),
       w = Math.max(80, naturalW * scale),
       h = Math.max(80, naturalH * scale),
-      x = Math.max(0, Math.min(SIZE - w, visible.x + (visible.w - w) / 2)),
-      y = Math.max(0, Math.min(SIZE - h, visible.y + (visible.h - h) / 2));
+      x = Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT - w, visible.x + (visible.w - w) / 2)),
+      y = Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT - h, visible.y + (visible.h - h) / 2));
     return { x, y, w, h };
   }
   function imageImportError(key) {
@@ -659,9 +659,9 @@
       x = first.x,
       y = previous.y + previous.h + Math.max(40, first.h * 0.05);
     // Start a new column when the page stack would run past the canvas edge.
-    if (y + h > SIZE) {
+    if (y + h > WORLD_LIMIT) {
       return {
-        x:Math.max(0, Math.min(SIZE - w, first.x + first.w + Math.max(80, first.w * 0.08))),
+        x:Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT - w, first.x + first.w + Math.max(80, first.w * 0.08))),
         y:first.y,
         w,
         h,
@@ -990,7 +990,7 @@
         : typeof item.html === "string" ? item.html : "";
     if (widgetType === "html_widget" && (!html.trim() || html.length > MAX_WIDGET_HTML_LENGTH)
       || widgetType === "diagram_source" && (!source || !normalizedSourceFormat || html.length > MAX_WIDGET_HTML_LENGTH)) return null;
-    if (!n(item.x) || !n(item.y) || !n(item.w, 300, SIZE) || !n(item.h, 200, SIZE) || item.x + item.w > SIZE || item.y + item.h > SIZE) return null;
+    if (!n(item.x) || !n(item.y) || !n(item.w, 300, WORLD_LIMIT) || !n(item.h, 200, WORLD_LIMIT) || item.x + item.w > WORLD_LIMIT || item.y + item.h > WORLD_LIMIT) return null;
     const contentW = item.contentW ?? item.w,
       contentH = item.contentH ?? item.h;
     if (!Number.isFinite(contentW) || contentW < 300 || contentW > MAX_WIDGET_CONTENT_DIMENSION
@@ -1404,7 +1404,7 @@
     }
     return null;
   }
-  function resizeWidgetBox(start, point, hit, minimumWidth = 300, minimumHeight = 200, limit = SIZE) {
+  function resizeWidgetBox(start, point, hit, minimumWidth = 300, minimumHeight = 200, limit = WORLD_LIMIT) {
     const contentW = start.contentW ?? start.w,
       contentH = start.contentH ?? start.h;
     if (hit === "width") {
@@ -1448,8 +1448,8 @@
   function updateWidgetGesturePoint(gesture, point) {
     const widget = gesture.widget;
     if (gesture.hit === "move") {
-      widget.x = Math.max(0, Math.min(SIZE - widget.w, gesture.start.x + point.x - gesture.startPoint.x));
-      widget.y = Math.max(0, Math.min(SIZE - widget.h, gesture.start.y + point.y - gesture.startPoint.y));
+      widget.x = Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT - widget.w, gesture.start.x + point.x - gesture.startPoint.x));
+      widget.y = Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT - widget.h, gesture.start.y + point.y - gesture.startPoint.y));
     } else Object.assign(widget, resizeWidgetBox(gesture.start, point, gesture.hit));
     gesture.changed = ["x", "y", "w", "h"].some((key) => Math.abs(widget[key] - gesture.start[key]) > 0.01);
     positionWidget(widget);
@@ -1934,7 +1934,7 @@
   }
   function addAnimation(scene, transform = scene, playback = null) {
     if (!pluginEnabled("animation") || state.animations.length >= MAX_VISIBLE_ANIMATIONS) return null;
-    const normalized = ANIMATION?.normalize(scene, SIZE);
+    const normalized = ANIMATION?.normalize(scene, WORLD_LIMIT);
     if (!normalized) return null;
     recordAnimationsBefore();
     const now = performance.now(),
@@ -2134,9 +2134,6 @@
     animationCtx.clip();
     animationCtx.translate(state.panX, state.panY);
     animationCtx.scale(state.scale, state.scale);
-    animationCtx.beginPath();
-    animationCtx.rect(0, 0, SIZE, SIZE);
-    animationCtx.clip();
     drawAnimationsToContext(animationCtx, logicalRegion, now);
     animationCtx.restore();
   }
@@ -2225,10 +2222,12 @@
   }
   function forTiles(x, y, w, h, fn, create = true) {
     if (w <= 0 || h <= 0) return;
-    const x0 = Math.max(0, Math.floor(x / TILE)),
-      y0 = Math.max(0, Math.floor(y / TILE)),
-      x1 = Math.min(Math.ceil(SIZE / TILE) - 1, Math.ceil((x + w) / TILE) - 1),
-      y1 = Math.min(Math.ceil(SIZE / TILE) - 1, Math.ceil((y + h) / TILE) - 1);
+    // Tiles are keyed by signed "tx,ty" strings in a sparse map, so any
+    // rectangle of the endless board can be visited directly.
+    const x0 = Math.max(-Math.ceil(WORLD_LIMIT / TILE), Math.floor(x / TILE)),
+      y0 = Math.max(-Math.ceil(WORLD_LIMIT / TILE), Math.floor(y / TILE)),
+      x1 = Math.min(Math.ceil(WORLD_LIMIT / TILE) - 1, Math.ceil((x + w) / TILE) - 1),
+      y1 = Math.min(Math.ceil(WORLD_LIMIT / TILE) - 1, Math.ceil((y + h) / TILE) - 1);
     if (x1 < x0 || y1 < y0) return;
     for (let ty = y0; ty <= y1; ty++)
       for (let tx = x0; tx <= x1; tx++) {
@@ -2249,7 +2248,7 @@
     interactionLayer.height = screen.height;
     state.animationFullRedraw = true;
     if (!state.viewInitialized && r.width > 0 && r.height > 0) {
-      state.scale = Math.max(0.03, Math.min(2, Math.max(r.width, r.height) / 10000 * INITIAL_VIEW_ZOOM));
+      state.scale = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.max(r.width, r.height) / 10000 * INITIAL_VIEW_ZOOM));
       state.panX = (r.width - SIZE * state.scale) / 2;
       state.panY = (r.height - SIZE * state.scale) / 2;
       state.viewInitialized = true;
@@ -2261,10 +2260,10 @@
     const d = devicePixelRatio || 1,
       r = view.getBoundingClientRect(),
       visible = region || {
-        x:Math.max(0, -state.panX / state.scale),
-        y:Math.max(0, -state.panY / state.scale),
-        w:Math.min(SIZE, (r.width - state.panX) / state.scale) - Math.max(0, -state.panX / state.scale),
-        h:Math.min(SIZE, (r.height - state.panY) / state.scale) - Math.max(0, -state.panY / state.scale),
+        x:-state.panX / state.scale,
+        y:-state.panY / state.scale,
+        w:(r.width - state.panX) / state.scale,
+        h:(r.height - state.panY) / state.scale,
       };
     inkCtx.setTransform(d, 0, 0, d, 0, 0);
     inkCtx.clearRect(0, 0, r.width, r.height);
@@ -2272,9 +2271,6 @@
     inkCtx.save();
     inkCtx.translate(state.panX, state.panY);
     inkCtx.scale(state.scale, state.scale);
-    inkCtx.beginPath();
-    inkCtx.rect(0, 0, SIZE, SIZE);
-    inkCtx.clip();
     forTiles(visible.x, visible.y, visible.w, visible.h, (canvas, tx, ty) => inkCtx.drawImage(canvas, tx * TILE, ty * TILE), false);
     drawSharpOverlays(inkCtx, visible);
     inkCtx.restore();
@@ -2301,10 +2297,10 @@
       t = -state.panY / state.scale,
       rr = (r.width - state.panX) / state.scale,
       b = (r.height - state.panY) / state.scale,
-      vl = Math.max(0, l),
-      vt = Math.max(0, t),
-      vr = Math.min(SIZE, rr),
-      vb = Math.min(SIZE, b);
+      vl = l,
+      vt = t,
+      vr = rr,
+      vb = b;
     if (state.gridVisible) {
       // Fall back to a coarser spacing when the fine grid would crowd the screen.
       const spacing = 500 * state.scale >= 6 ? 500 : 5000 * state.scale >= 6 ? 5000 : 0;
@@ -2324,9 +2320,6 @@
       }
     }
     ctx.save();
-    ctx.beginPath();
-    ctx.rect(0, 0, SIZE, SIZE);
-    ctx.clip();
     drawImagesToContext(ctx, { x:vl, y:vt, w:vr - vl, h:vb - vt });
     drawTextBoxesToContext(ctx, { x:vl, y:vt, w:vr - vl, h:vb - vt });
     ctx.restore();
@@ -2833,9 +2826,6 @@
     interactionCtx.save();
     interactionCtx.translate(state.panX, state.panY);
     interactionCtx.scale(state.scale, state.scale);
-    interactionCtx.beginPath();
-    interactionCtx.rect(0, 0, SIZE, SIZE);
-    interactionCtx.clip();
     if (state.drawing?.preview) drawPreview(state.drawing.preview, interactionCtx);
     drawPointerPreview(interactionCtx);
     if (state.selection) drawSelection(state.selection, interactionCtx);
@@ -2857,10 +2847,10 @@
   function clientPoint(e) {
     const r = view.getBoundingClientRect();
     return {
-      // Clamp into the logical canvas so input beyond the edge still lands
-      // on the paper instead of being rejected.
-      x: Math.max(0, Math.min(SIZE, (e.clientX - r.left - state.panX) / state.scale)),
-      y: Math.max(0, Math.min(SIZE, (e.clientY - r.top - state.panY) / state.scale)),
+      // Clamp into the endless world bounds so wild input stays finite
+      // instead of being rejected: the board itself is signed and endless.
+      x: Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT, (e.clientX - r.left - state.panX) / state.scale)),
+      y: Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT, (e.clientY - r.top - state.panY) / state.scale)),
     };
   }
   function blockCanvasInput(duration = 1000) {
@@ -2908,8 +2898,8 @@
   function keepTextEditorInsideCanvas(editor) {
     const logicalWidth = editor.widthCss / Math.max(0.03, state.scale),
       logicalHeight = editor.heightCss / Math.max(0.03, state.scale);
-    editor.x = Math.max(0, Math.min(SIZE - logicalWidth, editor.x));
-    editor.y = Math.max(0, Math.min(SIZE - logicalHeight, editor.y));
+    editor.x = Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT - logicalWidth, editor.x));
+    editor.y = Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT - logicalHeight, editor.y));
   }
   function keepTextEditorVisible(editor) {
     const viewport = textEditorViewportSize(),
@@ -2918,10 +2908,10 @@
       point = textEditorScreenPoint(editor),
       maxLeft = Math.max(inset, viewport.width - editor.widthCss - inset),
       maxTop = Math.max(inset, viewport.height - editor.heightCss - inset),
-      canvasLeft = state.panX,
-      canvasTop = state.panY,
-      canvasRight = state.panX + SIZE * scale - editor.widthCss,
-      canvasBottom = state.panY + SIZE * scale - editor.heightCss,
+      canvasLeft = state.panX - WORLD_LIMIT * scale,
+      canvasTop = state.panY - WORLD_LIMIT * scale,
+      canvasRight = state.panX + WORLD_LIMIT * scale - editor.widthCss,
+      canvasBottom = state.panY + WORLD_LIMIT * scale - editor.heightCss,
       minLeft = Math.max(inset, canvasLeft),
       minTop = Math.max(inset, canvasTop),
       boundedMaxLeft = Math.min(maxLeft, canvasRight),
@@ -3217,8 +3207,8 @@
         height = fitted.height;
       fontSize = fitted.fontSize;
       maxWidth = fitted.maxWidth;
-      x = Math.max(0, Math.min(SIZE - width, x));
-      y = Math.max(0, Math.min(SIZE - height, y));
+      x = Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT - width, x));
+      y = Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT - height, y));
       const
         box = { x, y, w: width, h: height },
         existingIndex = editor.sourceTextBoxId ? state.textBoxes.findIndex((item) => item.id === editor.sourceTextBoxId) : -1;
@@ -3514,7 +3504,7 @@
       },
       distance = Math.max(1, Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y)),
       r = view.getBoundingClientRect(),
-      next = Math.max(0.01, Math.min(2, (g.scale * distance) / g.distance)),
+      next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, (g.scale * distance) / g.distance)),
       anchorX = (g.center.x - r.left - g.panX) / g.scale,
       anchorY = (g.center.y - r.top - g.panY) / g.scale;
     state.scale = next;
@@ -3534,7 +3524,7 @@
   function zoomCanvasAt(clientX, clientY, deltaY) {
     const rect = view.getBoundingClientRect(),
       factor = deltaY < 0 ? 1.12 : 0.89,
-      next = Math.max(0.01, Math.min(2, state.scale * factor)),
+      next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, state.scale * factor)),
       px = clientX - rect.left,
       py = clientY - rect.top;
     state.panX = px - ((px - state.panX) * next) / state.scale;
@@ -3545,14 +3535,14 @@
     wheelNavigating();
   }
   function valid(p) {
-    return p.x >= 0 && p.x <= SIZE && p.y >= 0 && p.y <= SIZE;
+    return p.x >= -WORLD_LIMIT && p.x <= WORLD_LIMIT && p.y >= -WORLD_LIMIT && p.y <= WORLD_LIMIT;
   }
   function mergeDirty(x, y, p = 10) {
     const a = {
-      x: Math.max(0, x - p),
-      y: Math.max(0, y - p),
-      w: Math.min(SIZE, x + p) - Math.max(0, x - p),
-      h: Math.min(SIZE, y + p) - Math.max(0, y - p),
+      x: x - p,
+      y: y - p,
+      w: p * 2,
+      h: p * 2,
     };
     if (!state.dirty) state.dirty = a;
     else {

@@ -4,10 +4,11 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const selection = require("../public/selection.js");
 
-test("lasso bounds enclose a freehand path and stay inside the canvas", () => {
+test("lasso bounds enclose a freehand path inside the signed world", () => {
   const path = [{ x: -4, y: 8.8 }, { x: 18.7, y: 21.2 }, { x: 11.1, y: 4.2 }];
-  assert.deepEqual(selection.polygonBounds(path, 20), { x: 0, y: 4, w: 19, h: 16 });
-  assert.deepEqual(selection.clipPoint({ x: -3, y: 24 }, 20), { x: 0, y: 20 });
+  assert.deepEqual(selection.polygonBounds(path, 20), { x: -4, y: 4, w: 23, h: 16 });
+  assert.deepEqual(selection.clipPoint({ x: -3, y: 24 }, 20), { x: -3, y: 20 });
+  assert.deepEqual(selection.clipPoint({ x: -30, y: 5 }, 20), { x: -20, y: 5 });
 });
 
 test("lasso point sampling follows drawn distance without flooding the path", () => {
@@ -24,10 +25,23 @@ test("lasso inclusion follows the path instead of its rectangular bounds", () =>
   assert.equal(selection.pointInPolygon({ x: 13, y: 2 }, triangle), false);
 });
 
-test("selection movement stays within the logical canvas", () => {
+test("containment check decides which placed content a region clears", () => {
+  const region = { x: -100, y: -50, w: 200, h: 100 };
+  assert.equal(selection.containsBox(region, { x: -90, y: -40, w: 50, h: 30 }), true);
+  assert.equal(selection.containsBox(region, { x: -100, y: -50, w: 200, h: 100 }), true, "an item matching the region exactly is contained");
+  assert.equal(selection.containsBox(region, { x: -90, y: -40, w: 200, h: 30 }), false, "an item crossing the right edge is not contained");
+  assert.equal(selection.containsBox(region, { x: -120, y: -40, w: 50, h: 30 }), false, "an item crossing the left edge is not contained");
+  assert.equal(selection.containsBox(region, { x: -90, y: -60, w: 50, h: 30 }), false, "an item crossing the top edge is not contained");
+  assert.equal(selection.containsBox(region, { x: -90, y: -40, w: 50, h: 120 }), false, "an item crossing the bottom edge is not contained");
+  assert.equal(selection.containsBox(region, null), false);
+  assert.equal(selection.containsBox(null, { x: 0, y: 0, w: 1, h: 1 }), false);
+});
+
+test("selection movement stays within the signed world bounds", () => {
   const box = { x: 20, y: 30, w: 40, h: 25 };
-  assert.deepEqual(selection.moveBox(box, -100, 90, 100), { x: 0, y: 75, w: 40, h: 25 });
+  assert.deepEqual(selection.moveBox(box, -100, 90, 100), { x: -80, y: 75, w: 40, h: 25 });
   assert.deepEqual(selection.moveBox(box, 12, -8, 100), { x: 32, y: 22, w: 40, h: 25 });
+  assert.deepEqual(selection.moveBox(box, -1000, 0, 100), { x: -100, y: 30, w: 40, h: 25 });
 });
 
 test("selection resize is uniform and respects minimum and canvas bounds", () => {
@@ -98,7 +112,7 @@ test("selection transforms remain finite and inside the canvas across varied dra
       resized = selection.resizeBox(moved, { x: moved.x + (index - 40) * 37, y: moved.y + (180 - index) * 29 }, 24, limit);
     for (const box of [moved, resized]) {
       assert.ok(Object.values(box).every(Number.isFinite));
-      assert.ok(box.x >= 0 && box.y >= 0);
+      assert.ok(box.x >= -limit && box.y >= -limit);
       assert.ok(box.x + box.w <= limit + 1e-8);
       assert.ok(box.y + box.h <= limit + 1e-8);
       assert.ok(box.w > 0 && box.h > 0);

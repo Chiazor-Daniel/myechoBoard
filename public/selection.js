@@ -4,24 +4,26 @@
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.PENECHO_SELECTION = api;
 })(typeof globalThis === "object" ? globalThis : this, function () {
+  // The board is a signed, endless plane: `limit` is the half-extent, so
+  // valid coordinates span [-limit, limit] on each axis.
   function clipPoint(point, limit) {
-    return { x: Math.max(0, Math.min(limit, point.x)), y: Math.max(0, Math.min(limit, point.y)) };
+    return { x: Math.max(-limit, Math.min(limit, point.x)), y: Math.max(-limit, Math.min(limit, point.y)) };
   }
 
   function polygonBounds(points, limit) {
     if (!points.length) return null;
-    let left = limit,
-      top = limit,
-      right = 0,
-      bottom = 0;
+    let left = Infinity,
+      top = Infinity,
+      right = -Infinity,
+      bottom = -Infinity;
     for (const point of points) {
       left = Math.min(left, point.x);
       top = Math.min(top, point.y);
       right = Math.max(right, point.x);
       bottom = Math.max(bottom, point.y);
     }
-    left = Math.max(0, Math.floor(left));
-    top = Math.max(0, Math.floor(top));
+    left = Math.max(-limit, Math.floor(left));
+    top = Math.max(-limit, Math.floor(top));
     right = Math.min(limit, Math.ceil(right));
     bottom = Math.min(limit, Math.ceil(bottom));
     return { x: left, y: top, w: Math.max(0, right - left), h: Math.max(0, bottom - top) };
@@ -79,12 +81,22 @@
     return { x, y, w: right - x, h: bottom - y };
   }
 
+  // True when inner sits fully inside outer (with a small tolerance so items
+  // that touch the selection edge count as contained).
+  function containsBox(outer, inner, tolerance = 0.5) {
+    if (!outer || !inner) return false;
+    return inner.x >= outer.x - tolerance &&
+      inner.y >= outer.y - tolerance &&
+      inner.x + inner.w <= outer.x + outer.w + tolerance &&
+      inner.y + inner.h <= outer.y + outer.h + tolerance;
+  }
+
   function moveBox(box, dx, dy, limit) {
     if (!box || !Number.isFinite(box.w) || !Number.isFinite(box.h) || box.w <= 0 || box.h <= 0) return { ...box };
     return {
       ...box,
-      x: Math.max(0, Math.min(limit - box.w, box.x + dx)),
-      y: Math.max(0, Math.min(limit - box.h, box.y + dy)),
+      x: Math.max(-limit, Math.min(limit - box.w, box.x + dx)),
+      y: Math.max(-limit, Math.min(limit - box.h, box.y + dy)),
     };
   }
 
@@ -179,6 +191,7 @@
     pointInPolygon,
     pointNearPath,
     unionBox,
+    containsBox,
     moveBox,
     resizeBox,
     resizeBoxAxis,

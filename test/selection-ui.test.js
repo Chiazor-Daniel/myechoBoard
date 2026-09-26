@@ -17,16 +17,16 @@ test("selection toolbar is an accessible viewport overlay with stable action hoo
   assert.match(layer, /class="selection-overlay-layer"[^>]*hidden/);
   assert.match(layer, /id="selectionToolbar"[^>]*role="toolbar"[^>]*data-i18n-aria="selectionTools"/);
   assert.match(layer, /id="selectionScopeNotice"[^>]*data-i18n="selectionScopeNotice"/);
-  for (const [id, key] of [
-    ["selectionTypesetBtn", "selectionTypeset"],
-    ["selectionDeleteBtn", "selectionDelete"],
-    ["selectionCancelBtn", "selectionCancel"],
+  for (const [id, key, titleKey] of [
+    ["selectionTypesetBtn", "selectionTypeset", "selectionTypeset"],
+    ["selectionDeleteBtn", "selectionDelete", "selectionDeleteHint"],
+    ["selectionCancelBtn", "selectionCancel", "selectionCancel"],
   ]) {
     const button = layer.match(new RegExp(`<button[^>]*id="${id}"[^>]*>`))?.[0] || "";
     assert.match(button, /type="button"/);
     assert.match(button, new RegExp(`data-i18n="${key}"`));
     assert.match(button, new RegExp(`data-i18n-aria="${key}"`));
-    assert.match(button, new RegExp(`data-i18n-title="${key}"`));
+    assert.match(button, new RegExp(`data-i18n-title="${titleKey}"`));
   }
   assert.ok(viewport.indexOf('id="screen"') < viewport.indexOf('id="selectionOverlayLayer"'));
   assert.ok(viewport.indexOf('id="selectionOverlayLayer"') < viewport.indexOf('id="textEditorLayer"'));

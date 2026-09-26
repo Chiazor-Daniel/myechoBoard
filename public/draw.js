@@ -121,7 +121,7 @@
     return result;
   }
   function normalize(command, canvasSize = 20000) {
-    if (!command || typeof command !== "object" || !Array.isArray(command.origin) || command.origin.length !== 2 || !command.origin.every((value) => integer(value, 0, canvasSize))) return null;
+    if (!command || typeof command !== "object" || !Array.isArray(command.origin) || command.origin.length !== 2 || !command.origin.every((value) => integer(value, -canvasSize, canvasSize))) return null;
     if (!Array.isArray(command.types) || !Array.isArray(command.items) || !command.types.length || command.types.length !== command.items.length || command.types.length > MAX_ITEMS) return null;
     const width = command.width === undefined ? 30 : command.width,
       tension = command.tension === undefined ? 50 : command.tension;

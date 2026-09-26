@@ -159,7 +159,7 @@
             ...pluginRequestPayload(),
             ...(widgetEditContext ? { widgetEdit:widgetEditContext } : {}),
             ...(typedInput ? { typedInput } : {}),
-            canvasSize: { w: SIZE, h: SIZE },
+            canvasSize: { w: WORLD_LIMIT * 2, h: WORLD_LIMIT * 2, min: -WORLD_LIMIT },
             uiTheme: state.theme,
             persona: {
               research: "Rigorous mathematical-physics research and teaching mentor. Prioritize assumptions, derivations, units, physical interpretation, proofs, and verifiable code or numerical checks when useful. Be concise but academically precise; never claim to literally be Einstein unless asked for roleplay.",
@@ -316,10 +316,10 @@
   }
   function viewportRect() {
     const r = view.getBoundingClientRect(),
-      x = Math.max(0, -state.panX / state.scale),
-      y = Math.max(0, -state.panY / state.scale),
-      right = Math.min(SIZE, (r.width - state.panX) / state.scale),
-      bottom = Math.min(SIZE, (r.height - state.panY) / state.scale);
+      x = -state.panX / state.scale,
+      y = -state.panY / state.scale,
+      right = (r.width - state.panX) / state.scale,
+      bottom = (r.height - state.panY) / state.scale;
     return right > x && bottom > y ? { x, y, w: right - x, h: bottom - y } : null;
   }
   function visibleInkBounds(visible) {
@@ -332,7 +332,7 @@
       let ink = state.inkBounds.get(k);
       if (ink === undefined) {
         const c = tiles.get(k);
-        ink = c ? inkBox(c, Math.min(TILE, SIZE - tx * TILE), Math.min(TILE, SIZE - ty * TILE)) : null;
+        ink = c ? inkBox(c, TILE, TILE) : null;
         state.inkBounds.set(k, ink);
       }
       if (!ink) continue;
@@ -484,7 +484,7 @@
     return {
       atlasImage: out.toDataURL("image/png"),
       atlasSize: imageSize,
-      visibleRect: { x: 0, y: 0, w: SIZE, h: SIZE },
+      visibleRect: viewportRect() || { x: 0, y: 0, w: SIZE, h: SIZE },
       captureRect: { ...sourceRect },
       sourceRect,
       imageScale,
@@ -544,7 +544,7 @@
     return {
       atlasImage: out.toDataURL("image/png"),
       atlasSize: imageSize,
-      visibleRect: { x: 0, y: 0, w: SIZE, h: SIZE },
+      visibleRect: viewportRect() || { x: 0, y: 0, w: SIZE, h: SIZE },
       captureRect: { ...sourceRect },
       sourceRect,
       imageScale,
@@ -627,7 +627,7 @@
     const epsilon = 0.001;
     return inner.x >= outer.x - epsilon && inner.y >= outer.y - epsilon && inner.x + inner.w <= outer.x + outer.w + epsilon && inner.y + inner.h <= outer.y + outer.h + epsilon;
   }
-  const n = (v, min = 0, max = SIZE) => Number.isFinite(v) && v >= min && v <= max;
+  const n = (v, min = -WORLD_LIMIT, max = WORLD_LIMIT) => Number.isFinite(v) && v >= min && v <= max;
   function matchedFontSize(value) {
     const screenReadable = 42 / Math.max(0.03, state.scale);
     return Math.max(24, Math.min(650, Math.max(+value || 180, screenReadable)));
@@ -653,30 +653,36 @@
     const next = { ...command },
       preferredY = Math.max(capture.y, Math.min(capture.y + capture.h - Math.min(height, capture.h), latestBox.y + latestBox.h + padding));
     next.x = Math.max(capture.x, Math.min(capture.x + capture.w - Math.min(width, capture.w), latestBox.x));
-    next.y = Math.max(0, Math.min(SIZE - height, preferredY));
-    if (next.tool === "write_text") next.maxWidth = Math.max(next.fontSize, Math.min(next.maxWidth, SIZE - next.x));
+    next.y = Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT - height, preferredY));
+    if (next.tool === "write_text") next.maxWidth = Math.max(next.fontSize, Math.min(next.maxWidth, WORLD_LIMIT - next.x));
     return [next];
   }
   function widgetGeometryForViewport(visibleRect) {
     const bucket = (value) => Math.ceil(Math.min(SIZE, Math.max(1, Number(value) || 1)) / 1000) * 1000,
       viewportW = bucket(visibleRect?.w), viewportH = bucket(visibleRect?.h);
     return {
+      // Widgets drafted smaller than min are enlarged to min before display,
+      // matching the server's tolerance boundary.
+      min:{ w:Math.max(1000,Math.round(viewportW/4)), h:Math.max(600,Math.round(viewportH/4)) },
       max:{ w:Math.max(300,Math.round(viewportW/2)), h:Math.max(200,Math.round(viewportH/2)) },
     };
   }
   function fitWidgetGeometry(command, visibleRect) {
     if (!command || ![command.x, command.y, command.w, command.h].every(Number.isFinite)) return null;
-    const target = widgetGeometryForViewport(visibleRect).max;
+    const guide = widgetGeometryForViewport(visibleRect),
+      floor = guide.min,
+      target = guide.max;
     let x = Math.round(command.x), y = Math.round(command.y),
       w = Math.round(command.w),
       h = Math.round(command.h);
     if (w <= 0 || h <= 0) {
       w = 2400;
       h = 1400;
-    } else if (w < 300 || h < 200) {
-      const scale = Math.max(300 / w, 200 / h);
-      w = Math.ceil(w * scale);
-      h = Math.ceil(h * scale);
+    } else if (w < floor.w || h < floor.h) {
+      // Independent per-dimension floor: the widget reflows to its new aspect
+      // ratio, so enlarging one axis never distorts the chosen layout.
+      w = Math.max(w, floor.w);
+      h = Math.max(h, floor.h);
     }
     if (w > 10000 || h > 10000 || w * h > 40000000) {
       const scale = Math.min(1, target.w / w, target.h / h, 10000 / w, 10000 / h, Math.sqrt(40000000 / (w * h)));
@@ -685,10 +691,10 @@
     }
     w = Math.max(300, w);
     h = Math.max(200, h);
-    w = Math.min(w, SIZE);
-    h = Math.min(h, SIZE);
-    x = Math.max(0, Math.min(SIZE - w, x));
-    y = Math.max(0, Math.min(SIZE - h, y));
+    w = Math.min(w, WORLD_LIMIT);
+    h = Math.min(h, WORLD_LIMIT);
+    x = Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT - w, x));
+    y = Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT - h, y));
     return w >= 300 && h >= 200 ? { x, y, w, h } : null;
   }
   function validWidgetRefreshSeconds(value) {
@@ -712,11 +718,11 @@
           if (!n(c.x) || !n(c.y) || typeof c.text !== "string" || !Number.isFinite(c.maxWidth)) return null;
           c.text = c.text.slice(0, AI_TEXT_MAX_LENGTH);
           c.fontSize = matchedTextFontSize(c.fontSize, c.text);
-          c.maxWidth = Math.max(c.fontSize, Math.min(SIZE - c.x, c.maxWidth));
+          c.maxWidth = Math.max(c.fontSize, Math.min(WORLD_LIMIT - c.x, c.maxWidth));
           c.lineHeight = Math.max(1, Math.min(2.2, +c.lineHeight || 1.35));
           c.color = aiColor;
           if (c.maxWidth < c.fontSize) return null;
-          c.y = Math.min(c.y, Math.max(0, SIZE - c.fontSize * c.lineHeight * 2));
+          c.y = Math.min(c.y, Math.max(-WORLD_LIMIT, WORLD_LIMIT - c.fontSize * c.lineHeight * 2));
         }
         if (c.tool === "draw_formula") {
           if (!n(c.x) || !n(c.y) || typeof c.latex !== "string") return null;
@@ -724,10 +730,10 @@
           c.fontSize = matchedFontSize(c.fontSize);
           c.color = aiColor;
           const estimatedWidth = Math.min(5000, Math.max(c.fontSize, c.latex.length * c.fontSize * 0.72));
-          c.x = Math.min(c.x, Math.max(0, SIZE - estimatedWidth));
-          c.y = Math.min(c.y, Math.max(0, SIZE - c.fontSize * 1.8));
+          c.x = Math.min(c.x, Math.max(-WORLD_LIMIT, WORLD_LIMIT - estimatedWidth));
+          c.y = Math.min(c.y, Math.max(-WORLD_LIMIT, WORLD_LIMIT - c.fontSize * 1.8));
         }
-        if (c.tool === "plot_function" && (!n(c.x) || !n(c.y) || !n(c.w, 240, 6000) || !n(c.h, 180, 6000) || c.w * c.h > 8000000 || Math.max(c.w / c.h, c.h / c.w) > 6 || 12000000 < plotPixels + c.w * c.h || c.x + c.w > SIZE || c.y + c.h > SIZE || typeof c.expression !== "string" || c.expression.length > 180)) return null;
+        if (c.tool === "plot_function" && (!n(c.x) || !n(c.y) || !n(c.w, 240, 6000) || !n(c.h, 180, 6000) || c.w * c.h > 8000000 || Math.max(c.w / c.h, c.h / c.w) > 6 || 12000000 < plotPixels + c.w * c.h || c.x + c.w > WORLD_LIMIT || c.y + c.h > WORLD_LIMIT || c.x < -WORLD_LIMIT || c.y < -WORLD_LIMIT || typeof c.expression !== "string" || c.expression.length > 180)) return null;
         if (c.tool === "plot_function") {
           c.expression = normalizePlotExpression(c.expression);
           try {
@@ -739,7 +745,7 @@
           plotPixels += c.w * c.h;
         }
         if (c.tool === "draw") {
-          const normalized = DRAW?.normalize(c, SIZE);
+          const normalized = DRAW?.normalize(c, WORLD_LIMIT);
           if (!normalized) return null;
           c = { ...normalized, color:aiColor };
         }
@@ -802,7 +808,7 @@
             if (Math.max(...xs) - Math.min(...xs) > 3000 || Math.max(...ys) - Math.min(...ys) > 3000) return null;
           } else {
             c.mode = "rect";
-            if (!n(c.x) || !n(c.y) || !n(c.w, 1, 2000) || !n(c.h, 1, 2000) || c.x + c.w > SIZE || c.y + c.h > SIZE) return null;
+            if (!n(c.x) || !n(c.y) || !n(c.w, 1, 2000) || !n(c.h, 1, 2000) || c.x + c.w > WORLD_LIMIT || c.y + c.h > WORLD_LIMIT) return null;
           }
         }
         return c;
@@ -864,7 +870,7 @@
         } else if (c.tool === "plot_function") {
           image = plot(c);
         } else if (c.tool === "animate_scene") {
-          pendingCommand = ANIMATION.normalize(c, SIZE);
+          pendingCommand = ANIMATION.normalize(c, WORLD_LIMIT);
           image = pendingCommand ? ANIMATION.rasterize(pendingCommand, offscreen, 0, Math.min(2, sharpRenderRatio())) : null;
         } else if (c.tool === "draw") {
           const made = DRAW.render(c, offscreen, c.color);
@@ -874,8 +880,8 @@
         }
         if (image) {
           checkAI(revision, run);
-          x = Math.max(0, Math.min(x, SIZE - Math.min(image.logicalWidth || image.width, SIZE)));
-          y = Math.max(0, Math.min(y, SIZE - Math.min(image.logicalHeight || image.height, SIZE)));
+          x = Math.max(-WORLD_LIMIT, Math.min(x, WORLD_LIMIT - Math.min(image.logicalWidth || image.width, WORLD_LIMIT)));
+          y = Math.max(-WORLD_LIMIT, Math.min(y, WORLD_LIMIT - Math.min(image.logicalHeight || image.height, WORLD_LIMIT)));
           const accepted = await startPending(image, x, y, revision, meta, pendingCommand);
           if (accepted === AI_CANCELLED) throw Error(AI_CANCELLED);
           if (accepted === AI_SUPERSEDED) throw Error(AI_SUPERSEDED);
@@ -904,7 +910,7 @@
     else if (c.tool === "draw_formula") image = await formulaImage(c.latex, c.fontSize, c.color);
     else if (c.tool === "plot_function") image = plot(c);
     else if (c.tool === "animate_scene") {
-      pendingCommand = ANIMATION.normalize(c, SIZE);
+      pendingCommand = ANIMATION.normalize(c, WORLD_LIMIT);
       image = pendingCommand ? ANIMATION.rasterize(pendingCommand, offscreen, 0, Math.min(2, sharpRenderRatio())) : null;
     } else if (c.tool === "draw") {
       const made = DRAW.render(c, offscreen, c.color);
@@ -923,8 +929,8 @@
       copyText: copyTextForCommand(c),
       animationScene: c.tool === "animate_scene" ? pendingCommand : null,
       animationPlayback: c.tool === "animate_scene" ? createAnimationPlayback() : null,
-      x: Math.max(0, Math.min(x, SIZE - Math.min(logicalWidth, SIZE))),
-      y: Math.max(0, Math.min(y, SIZE - Math.min(logicalHeight, SIZE))),
+      x: Math.max(-WORLD_LIMIT, Math.min(x, WORLD_LIMIT - Math.min(logicalWidth, WORLD_LIMIT))),
+      y: Math.max(-WORLD_LIMIT, Math.min(y, WORLD_LIMIT - Math.min(logicalHeight, WORLD_LIMIT))),
       layoutWidth: logicalWidth,
       layoutHeight: logicalHeight,
     };
@@ -952,7 +958,7 @@
         y = Math.max(...collisions.map((prior) => prior.y + prior.h)) + gap;
       }
       const originalY = item.y;
-      item.y = Math.max(0, Math.min(SIZE - height, y));
+      item.y = Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT - height, y));
       if (item.y !== originalY) debug("tool-layout-adjusted", { ...meta, tool: item.command.tool, x: item.x, originalY, y: item.y, width, height });
       placed.push({ x: item.x, y: item.y, w: width, h: height });
     }
@@ -967,7 +973,7 @@
   function textRasterMetrics(text, f, maxWidth = 900, lineHeight = 1.35, family = state.aiFont, maxLength = AI_TEXT_MAX_LENGTH, pixelRatio = 1) {
     const content = text.slice(0, maxLength),
       fontFamily = family || "ui-rounded, system-ui, sans-serif";
-    maxWidth = Math.max(f, Math.min(SIZE, maxWidth));
+    maxWidth = Math.max(f, Math.min(WORLD_LIMIT, maxWidth));
     const probe = offscreen(1, 1).getContext("2d");
     probe.font = `${f}px ${fontFamily}`;
     const layout = layoutText(content, probe, maxWidth),
@@ -1244,10 +1250,10 @@
     blitSized(im, x, y, im.width * scaleX, im.height * scaleY);
   }
   function blitSized(im, x, y, w, h) {
-    const x0 = Math.max(0, Math.floor(x / TILE)),
-      y0 = Math.max(0, Math.floor(y / TILE)),
-      x1 = Math.min(Math.ceil(SIZE / TILE) - 1, Math.ceil((x + w) / TILE) - 1),
-      y1 = Math.min(Math.ceil(SIZE / TILE) - 1, Math.ceil((y + h) / TILE) - 1);
+    const x0 = Math.max(-Math.ceil(WORLD_LIMIT / TILE), Math.floor(x / TILE)),
+      y0 = Math.max(-Math.ceil(WORLD_LIMIT / TILE), Math.floor(y / TILE)),
+      x1 = Math.min(Math.ceil(WORLD_LIMIT / TILE) - 1, Math.ceil((x + w) / TILE) - 1),
+      y1 = Math.min(Math.ceil(WORLD_LIMIT / TILE) - 1, Math.ceil((y + h) / TILE) - 1);
     for (let ty = y0; ty <= y1; ty++)
       for (let tx = x0; tx <= x1; tx++) {
         recordBefore(tx, ty);
@@ -1469,9 +1475,9 @@
   function draftActionPoints(box, s, includeCopy = false, single = false) {
     const prefix = single ? "" : "item-",
       radius = s * 0.54,
-      clampX = (value) => Math.max(radius, Math.min(SIZE - radius, value)),
+      clampX = (value) => Math.max(-WORLD_LIMIT + radius, Math.min(WORLD_LIMIT - radius, value)),
       aboveY = box.y - s * 0.74,
-      actionY = aboveY - radius >= 0 ? aboveY : Math.min(SIZE - radius, box.y + radius + s * 0.18),
+      actionY = aboveY - radius >= -WORLD_LIMIT ? aboveY : Math.min(WORLD_LIMIT - radius, box.y + radius + s * 0.18),
       actions = {
         [prefix + "cancel"]: { x: clampX(box.x - s * 0.62), y: actionY },
         [prefix + "accept"]: { x: clampX(box.x + box.w + s * 0.62), y: actionY },
@@ -1535,9 +1541,9 @@
     context.font = `700 ${fontSize}px system-ui, sans-serif`;
     const width = context.measureText(label).width + paddingX * 2,
       height = fontSize + paddingY * 2,
-      x = Math.max(0, Math.min(SIZE - width, box.x + box.w / 2 - width / 2)),
+      x = Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT - width, box.x + box.w / 2 - width / 2)),
       above = box.y - s * 1.15 - height,
-      y = above >= 0 ? above : Math.min(SIZE - height, box.y + s * 0.95);
+      y = above >= -WORLD_LIMIT ? above : Math.min(WORLD_LIMIT - height, box.y + s * 0.95);
     context.fillStyle = "#111827e8";
     context.fillRect(x, y, width, height);
     context.fillStyle = "#fff";
@@ -2107,8 +2113,8 @@
       if (g.hit === "batch-move") {
         if (g.armed) {
           const box = g.batchStartBounds,
-            dx = Math.max(-box.x, Math.min(SIZE - box.x - box.w, q.x - g.startX)),
-            dy = Math.max(-box.y, Math.min(SIZE - box.y - box.h, q.y - g.startY));
+            dx = Math.max(-WORLD_LIMIT - box.x, Math.min(WORLD_LIMIT - box.x - box.w, q.x - g.startX)),
+            dy = Math.max(-WORLD_LIMIT - box.y, Math.min(WORLD_LIMIT - box.y - box.h, q.y - g.startY));
           p.items.forEach((item, index) => {
             item.x = g.itemStarts[index].x + dx;
             item.y = g.itemStarts[index].y + dy;
@@ -2119,7 +2125,7 @@
         return true;
       }
       if (g.hit === "batch-resize") {
-        if (g.armed) resizePendingBatchItems(p.items, g.batchStartBounds, g.itemStarts, q, 40, SIZE);
+        if (g.armed) resizePendingBatchItems(p.items, g.batchStartBounds, g.itemStarts, q, 40, WORLD_LIMIT);
         g.last = q;
         if (g.armed) render();
         return true;
@@ -2128,13 +2134,13 @@
         box = item ? pendingItemBounds(item) : null;
       if (!item || !box) return false;
       if (g.hit === "move" && g.armed) {
-        item.x = Math.max(0, Math.min(SIZE - box.w, item.x + q.x - g.last.x));
-        item.y = Math.max(0, Math.min(SIZE - box.h, item.y + q.y - g.last.y));
+        item.x = Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT - box.w, item.x + q.x - g.last.x));
+        item.y = Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT - box.h, item.y + q.y - g.last.y));
       } else if (g.hit === "resize" && g.armed) {
         const baseWidth = box.w / item.scaleX,
           baseHeight = box.h / item.scaleY,
           minimum = Math.max(40 / baseWidth, 40 / baseHeight),
-          maximum = Math.min((SIZE - item.x) / baseWidth, (SIZE - item.y) / baseHeight),
+          maximum = Math.min((WORLD_LIMIT - item.x) / baseWidth, (WORLD_LIMIT - item.y) / baseHeight),
           next = Math.max(minimum, Math.min(maximum, Math.max((q.x - item.x) / baseWidth, (q.y - item.y) / baseHeight)));
         item.scaleX = item.scaleY = next;
       } else if (g.hit === "width" && g.armed) {
@@ -2144,7 +2150,7 @@
           scheduleAiTextRerender(item, layoutWidth);
         } else {
           const baseWidth = box.w / item.scaleX;
-          item.scaleX = Math.max(40 / baseWidth, Math.min((SIZE - item.x) / baseWidth, (q.x - item.x) / baseWidth));
+          item.scaleX = Math.max(40 / baseWidth, Math.min((WORLD_LIMIT - item.x) / baseWidth, (q.x - item.x) / baseWidth));
         }
       } else if (g.hit === "height" && g.armed) {
         if (item.textCommand) {
@@ -2152,7 +2158,7 @@
           item.heightLocked = true;
         } else {
           const baseHeight = box.h / item.scaleY;
-          item.scaleY = Math.max(40 / baseHeight, Math.min((SIZE - item.y) / baseHeight, (q.y - item.y) / baseHeight));
+          item.scaleY = Math.max(40 / baseHeight, Math.min((WORLD_LIMIT - item.y) / baseHeight, (q.y - item.y) / baseHeight));
         }
       }
       g.last = q;
@@ -2161,14 +2167,14 @@
     }
     if (g.hit === "move" && g.armed) {
       const b = draftBounds(p);
-      p.x = Math.max(0, Math.min(SIZE - b.w, p.x + q.x - g.last.x));
-      p.y = Math.max(0, Math.min(SIZE - b.h, p.y + q.y - g.last.y));
+      p.x = Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT - b.w, p.x + q.x - g.last.x));
+      p.y = Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT - b.h, p.y + q.y - g.last.y));
     } else if (g.hit === "resize" && g.armed) {
       const minimum = 40,
         baseWidth = p.textCommand ? p.layoutWidth : p.image.logicalWidth || p.image.width,
         baseHeight = p.textCommand ? p.layoutHeight : p.image.logicalHeight || p.image.height,
         ratio = Math.max(minimum / baseWidth, minimum / baseHeight),
-        maxScale = Math.max(ratio, Math.min((SIZE - p.x) / baseWidth, (SIZE - p.y) / baseHeight)),
+        maxScale = Math.max(ratio, Math.min((WORLD_LIMIT - p.x) / baseWidth, (WORLD_LIMIT - p.y) / baseHeight)),
         next = Math.max(ratio, Math.min(maxScale, Math.max((q.x - p.x) / baseWidth, (q.y - p.y) / baseHeight)));
       p.scaleX = p.scaleY = next;
     } else if (g.hit === "width" && g.armed) {
@@ -2178,7 +2184,7 @@
         scheduleAiTextRerender(p, layoutWidth);
       } else {
         const baseWidth = draftBounds(p).w / p.scaleX;
-        p.scaleX = Math.max(40 / baseWidth, Math.min((SIZE - p.x) / baseWidth, (q.x - p.x) / baseWidth));
+        p.scaleX = Math.max(40 / baseWidth, Math.min((WORLD_LIMIT - p.x) / baseWidth, (q.x - p.x) / baseWidth));
       }
     } else if (g.hit === "height" && g.armed) {
       if (p.textCommand) {
@@ -2186,7 +2192,7 @@
         p.heightLocked = true;
       } else {
         const baseHeight = draftBounds(p).h / p.scaleY;
-        p.scaleY = Math.max(40 / baseHeight, Math.min((SIZE - p.y) / baseHeight, (q.y - p.y) / baseHeight));
+        p.scaleY = Math.max(40 / baseHeight, Math.min((WORLD_LIMIT - p.y) / baseHeight, (q.y - p.y) / baseHeight));
       }
     }
     g.last = q;
@@ -2253,10 +2259,10 @@
       ys = c.points.map((p) => p[1]),
       pad = c.size / 2;
     return {
-      x: Math.max(0, Math.min(...xs) - pad),
-      y: Math.max(0, Math.min(...ys) - pad),
-      w: Math.min(SIZE, Math.max(...xs) + pad) - Math.max(0, Math.min(...xs) - pad),
-      h: Math.min(SIZE, Math.max(...ys) + pad) - Math.max(0, Math.min(...ys) - pad),
+      x: Math.min(...xs) - pad,
+      y: Math.min(...ys) - pad,
+      w: Math.max(...xs) + pad - Math.min(...xs) + pad,
+      h: Math.max(...ys) + pad - Math.min(...ys) + pad,
     };
   }
   async function previewErase(c, revision) {
@@ -2654,17 +2660,17 @@
     if (gesture.hit === "resize") {
       const ratio = gesture.start.w / gesture.start.h,
         targetWidth = Math.max(80, Math.max(point.x - gesture.start.x, (point.y - gesture.start.y) * ratio)),
-        width = Math.min(SIZE - gesture.start.x, targetWidth),
-        height = Math.min(SIZE - gesture.start.y, width / ratio);
+        width = Math.min(WORLD_LIMIT - gesture.start.x, targetWidth),
+        height = Math.min(WORLD_LIMIT - gesture.start.y, width / ratio);
       animation.w = width;
       animation.h = height;
     } else if (gesture.hit === "width") {
-      animation.w = Math.max(80, Math.min(SIZE - gesture.start.x, point.x - gesture.start.x));
+      animation.w = Math.max(80, Math.min(WORLD_LIMIT - gesture.start.x, point.x - gesture.start.x));
     } else if (gesture.hit === "height") {
-      animation.h = Math.max(80, Math.min(SIZE - gesture.start.y, point.y - gesture.start.y));
+      animation.h = Math.max(80, Math.min(WORLD_LIMIT - gesture.start.y, point.y - gesture.start.y));
     } else {
-      animation.x = Math.max(0, Math.min(SIZE - animation.w, gesture.start.x + dx));
-      animation.y = Math.max(0, Math.min(SIZE - animation.h, gesture.start.y + dy));
+      animation.x = Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT - animation.w, gesture.start.x + dx));
+      animation.y = Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT - animation.h, gesture.start.y + dy));
     }
     gesture.changed ||= Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01;
     requestAnimationLayerRender();

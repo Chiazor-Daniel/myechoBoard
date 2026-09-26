@@ -130,7 +130,7 @@
       width = command.w,
       height = command.h,
       durationMs = period(command.durationMs, 8000);
-    if (![x, y, width, height].every(finite) || x < 0 || y < 0 || width < 120 || height < 90 || width > 6000 || height > 6000 || x + width > canvasSize || y + height > canvasSize) return null;
+    if (![x, y, width, height].every(finite) || x < -canvasSize || y < -canvasSize || width < 120 || height < 90 || width > 6000 || height > 6000 || x + width > canvasSize || y + height > canvasSize) return null;
     if (!Array.isArray(command.objects) || !command.objects.length || command.objects.length > MAX_OBJECTS || !Array.isArray(command.motions) || !command.motions.length || command.motions.length > MAX_MOTIONS) return null;
     const objects = command.objects.map((object, index) => normalizeObject(object, index, width, height));
     if (objects.some((object) => !object)) return null;

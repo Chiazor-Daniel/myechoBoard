@@ -219,7 +219,7 @@
   function snapshotPreview() {
     const preview = offscreen(180, 120),
       q = preview.getContext("2d"),
-      bounds = unionLocalBounds(unionLocalBounds(unionLocalBounds(unionLocalBounds(visibleInkBounds({ x:0, y:0, w:SIZE, h:SIZE }), imageBounds()), textBoxBounds()), animationBounds()), widgetBounds());
+      bounds = unionLocalBounds(unionLocalBounds(unionLocalBounds(unionLocalBounds(visibleInkBounds({ x:-WORLD_LIMIT, y:-WORLD_LIMIT, w:WORLD_LIMIT * 2, h:WORLD_LIMIT * 2 }), imageBounds()), textBoxBounds()), animationBounds()), widgetBounds());
     q.fillStyle = state.paint.paper;
     q.fillRect(0, 0, preview.width, preview.height);
     if (!bounds) return preview;
@@ -252,7 +252,7 @@
     let bounds = null;
     for (const [tileKey, tileCanvas] of tiles) {
       const [tx, ty] = tileKey.split(",").map(Number),
-        ink = inkBox(tileCanvas, Math.min(TILE, SIZE - tx * TILE), Math.min(TILE, SIZE - ty * TILE));
+        ink = inkBox(tileCanvas, TILE, TILE);
       if (!ink) continue;
       state.inkBounds.set(tileKey, ink);
       bounds = unionLocalBounds(bounds, { x: tx * TILE + ink.x, y: ty * TILE + ink.y, w: ink.w, h: ink.h });
@@ -549,7 +549,7 @@
     restoreImages(images);
     await restoreTextBoxes(item.textBoxes);
     if (item.view) {
-      state.scale = Math.max(0.01, Math.min(2, item.view.scale));
+      state.scale = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, item.view.scale));
       state.panX = item.view.panX;
       state.panY = item.view.panY;
       updateCoordinates();
@@ -822,10 +822,10 @@
       w = Math.abs(a.x - b.x) + pad * 2,
       h = Math.abs(a.y - b.y) + pad * 2;
     invalidateSharpOverlays({ x, y, w, h });
-    const x0 = Math.max(0, Math.floor(x / TILE)),
-      y0 = Math.max(0, Math.floor(y / TILE)),
-      x1 = Math.min(Math.ceil(SIZE / TILE) - 1, Math.floor((x + w) / TILE)),
-      y1 = Math.min(Math.ceil(SIZE / TILE) - 1, Math.floor((y + h) / TILE));
+    const x0 = Math.max(-Math.ceil(WORLD_LIMIT / TILE), Math.floor(x / TILE)),
+      y0 = Math.max(-Math.ceil(WORLD_LIMIT / TILE), Math.floor(y / TILE)),
+      x1 = Math.min(Math.ceil(WORLD_LIMIT / TILE) - 1, Math.floor((x + w) / TILE)),
+      y1 = Math.min(Math.ceil(WORLD_LIMIT / TILE) - 1, Math.floor((y + h) / TILE));
     for (let ty = y0; ty <= y1; ty++)
       for (let tx = x0; tx <= x1; tx++) {
         const expanded = { x: tx * TILE - pad, y: ty * TILE - pad, w: TILE + pad * 2, h: TILE + pad * 2 };
@@ -1006,7 +1006,7 @@
       let current = tiles.get(k);
       if (current && state.inkBounds.get(k) === undefined) {
         const [tx, ty] = k.split(",").map(Number),
-          ink = inkBox(current, Math.min(TILE, SIZE - tx * TILE), Math.min(TILE, SIZE - ty * TILE));
+          ink = inkBox(current, TILE, TILE);
         if (ink) state.inkBounds.set(k, ink);
         else {
           tiles.delete(k);
@@ -1142,7 +1142,7 @@
     if (selection.legacyActions) drawDraftActions(ctx, selection.box, size);
   }
   function captureSelection(points) {
-    const box = SELECT.polygonBounds(points, SIZE);
+    const box = SELECT.polygonBounds(points, WORLD_LIMIT);
     if (!box || points.length < 3 || SELECT.pathLength(points, state.scale) < 12 || box.w * state.scale < 4 || box.h * state.scale < 4) {
       setStatusKey("selectionTooSmall");
       return false;
@@ -1349,6 +1349,44 @@
     const pending = state.pending,
       selectionRequest = state.activeAI?.selection === selection || pending?.selection === selection;
     supersedeActiveAI("selection-deleted");
+    // Clearing the region removes everything inside it: the lassoed ink is
+    // already cut out of the tiles, and text boxes, images (including PDF
+    // pages), and live widgets fully inside the box go with it.
+    const box = selection.box,
+      inside = (item) => SELECT.containsBox(box, item),
+      removedTextBoxes = state.textBoxes.filter((item) => inside(textBoxBox(item))),
+      removedImages = state.images.filter((item) => inside(imageBox(item))),
+      removedWidgets = widgetRuntimeEnabled()
+        ? state.widgets.filter((widget) => !widget.pending && inside(widgetBox(widget)))
+        : [];
+    if (removedTextBoxes.length) {
+      recordTextBoxesBefore();
+      state.textBoxes = state.textBoxes.filter((item) => !removedTextBoxes.includes(item));
+    }
+    if (removedImages.length) {
+      recordImagesBefore();
+      state.images = state.images.filter((item) => !removedImages.includes(item));
+    }
+    if (removedWidgets.length) {
+      recordWidgetsBefore();
+      for (const widget of removedWidgets) unmountWidget(widget);
+      state.widgets = state.widgets.filter((widget) => !removedWidgets.includes(widget));
+    }
+    if (removedTextBoxes.length || removedImages.length || removedWidgets.length) {
+      if (removedTextBoxes.some((item) => item.id === state.selectedTextBoxId)) state.selectedTextBoxId = null;
+      if (removedImages.some((item) => item.id === state.selectedImageId)) {
+        state.selectedImageId = null;
+        state.imageEdit = null;
+      }
+      if (removedWidgets.some((widget) => widget.id === state.selectedWidgetId)) {
+        state.selectedWidgetId = null;
+        state.widgetEdit = null;
+      }
+      state.imageGesture = null;
+      state.widgetGesture = null;
+      invalidateSharpOverlays(box);
+      requestInteractionLayerRender();
+    }
     state.selection = null;
     state.selectionGesture = null;
     state.userRevision++;
@@ -1383,8 +1421,8 @@
       : SELECT.hitTest(selection.box, point, size, includeLegacyActions);
   }
   function rectanglePoints(start, end) {
-    const a = SELECT.clipPoint(start, SIZE),
-      b = SELECT.clipPoint(end, SIZE),
+    const a = SELECT.clipPoint(start, WORLD_LIMIT),
+      b = SELECT.clipPoint(end, WORLD_LIMIT),
       left = Math.min(a.x, b.x),
       right = Math.max(a.x, b.x),
       top = Math.min(a.y, b.y),
@@ -1393,7 +1431,7 @@
   }
   function beginSelectionLasso(event, point) {
     const shape = state.selectionShape === "rect" ? "rect" : "lasso";
-    state.selection = { phase: "lasso", shape, points: [SELECT.clipPoint(point, SIZE)], box: null, startPoint: SELECT.clipPoint(point, SIZE) };
+    state.selection = { phase: "lasso", shape, points: [SELECT.clipPoint(point, WORLD_LIMIT)], box: null, startPoint: SELECT.clipPoint(point, WORLD_LIMIT) };
     state.selectionGesture = { id: event.pointerId, hit: "lasso" };
     resetCanvasCursor();
     requestRender();
@@ -1423,17 +1461,17 @@
     if (gesture.hit === "lasso") {
       if (selection.shape === "rect") {
         selection.points = rectanglePoints(selection.startPoint, point);
-        selection.box = SELECT.polygonBounds(selection.points, SIZE);
+        selection.box = SELECT.polygonBounds(selection.points, WORLD_LIMIT);
       } else {
         const samples = typeof event.getCoalescedEvents === "function" ? event.getCoalescedEvents() : [],
           events = samples.length ? samples : [event],
           minimumDistance = 0.75 / Math.max(0.03, state.scale);
-        for (const sample of events) addLassoPoint(selection, SELECT.clipPoint(clientPoint(sample), SIZE), minimumDistance);
-        selection.box = SELECT.polygonBounds(selection.points, SIZE);
+        for (const sample of events) addLassoPoint(selection, SELECT.clipPoint(clientPoint(sample), WORLD_LIMIT), minimumDistance);
+        selection.box = SELECT.polygonBounds(selection.points, WORLD_LIMIT);
       }
-    } else if (gesture.hit === "move") selection.box = SELECT.moveBox(gesture.startBox, point.x - gesture.startPoint.x, point.y - gesture.startPoint.y, SIZE);
-    else if (gesture.hit === "resize") selection.box = SELECT.resizeBox(gesture.startBox, point, 24 / state.scale, SIZE);
-    else if (gesture.hit === "width" || gesture.hit === "height") selection.box = SELECT.resizeBoxAxis(gesture.startBox, point, gesture.hit, 24 / state.scale, SIZE);
+    } else if (gesture.hit === "move") selection.box = SELECT.moveBox(gesture.startBox, point.x - gesture.startPoint.x, point.y - gesture.startPoint.y, WORLD_LIMIT);
+    else if (gesture.hit === "resize") selection.box = SELECT.resizeBox(gesture.startBox, point, 24 / state.scale, WORLD_LIMIT);
+    else if (gesture.hit === "width" || gesture.hit === "height") selection.box = SELECT.resizeBoxAxis(gesture.startBox, point, gesture.hit, 24 / state.scale, WORLD_LIMIT);
     if (selection.phase === "active") selection.path = selectionPathFor(selection);
     requestRender();
     return true;
@@ -1448,7 +1486,7 @@
       if (selection && event.type !== "pointercancel") {
         if (selection.shape === "rect") selection.points = rectanglePoints(selection.startPoint, clientPoint(event));
         else {
-          const point = SELECT.clipPoint(clientPoint(event), SIZE);
+          const point = SELECT.clipPoint(clientPoint(event), WORLD_LIMIT);
           addLassoPoint(selection, point, 0.5 / state.scale);
         }
       }

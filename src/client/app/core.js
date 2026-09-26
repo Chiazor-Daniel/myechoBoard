@@ -1,7 +1,15 @@
 "use strict";
 (() => {
   const SIZE = 20000,
+    // The board is endless like Figma: world coordinates are signed and valid
+    // within ±WORLD_LIMIT on each axis. Ink tiles are stored sparsely by
+    // "tx,ty" string key, so content far from the origin costs nothing.
+    WORLD_LIMIT = 100000,
     TILE = 512,
+    // Zoom is kept in a controlled, Figma-like window: 10% for an overview,
+    // 400% for fine handwriting work. Every zoom path clamps to this range.
+    MIN_ZOOM = 0.1,
+    MAX_ZOOM = 4,
     INITIAL_VIEW_ZOOM = 1.5,
     EXPORT_MAX_DIMENSION = 16384,
     EXPORT_MAX_PIXELS = 64 * 1024 * 1024,
@@ -481,9 +489,10 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
       selectionScopeNotice: "AI answers use only this selected region",
       selectionTypeset: "Typeset",
       selectionDelete: "Delete",
+      selectionDeleteHint: "Clear everything in the selected region: ink, text, images, and widgets",
       selectionCancel: "Cancel",
       selectionTypesetting: "Typesetting selection...",
-      selectionDeleted: "Selected region deleted",
+      selectionDeleted: "Selected region cleared — ink, text, images, and widgets inside are gone",
       pendingConfirm: "Confirm or discard the current AI draft first",
       merged: "AI merged",
       plugins: "Plugins",
@@ -878,7 +887,7 @@ User writes “我需要根据地点, 显示空气质量”, names a place, and 
         if (!intersection(tileBox, visible)) continue;
         let ink = state.inkBounds.get(k);
         if (ink === undefined) {
-          ink = c ? inkBox(c, Math.min(TILE, SIZE - tx * TILE), Math.min(TILE, SIZE - ty * TILE)) : null;
+          ink = c ? inkBox(c, TILE, TILE) : null;
           state.inkBounds.set(k, ink);
         }
         if (ink) rects.push({ x: tileBox.x + ink.x, y: tileBox.y + ink.y, w: ink.w, h: ink.h });

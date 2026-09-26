@@ -69,7 +69,7 @@ test("canvas photos use one picker, editable image records, side action bar, and
     resizeImageBox = functionSource(app, "resizeImageBox"),
     drawImageChrome = functionSource(app, "drawImageChrome"),
     renderInteractionLayer = functionSource(app, "renderInteractionLayer"),
-    resizeImage = vm.runInNewContext(`(${resizeImageBox})`, { SIZE:20000 }),
+    resizeImage = vm.runInNewContext(`(${resizeImageBox})`, { SIZE:20000, WORLD_LIMIT:100000 }),
     resizeStart = { x:100, y:200, w:1200, h:800 };
   assert.doesNotMatch(addImageFile, /requestAI|buildViewportImage/);
   assert.match(addImageFile, /enterManualImageHandMode\(\)[\s\S]{0,80}?setStatusKey\("imageAdded"\)/);
@@ -412,7 +412,7 @@ test("simple native draw is loaded and rendered without enabling legacy animatio
   assert.match(html, /<script src="draw\.js"><\/script>[\s\S]*?<script src="app\.js"><\/script>/);
   assert.match(app, /const DRAW = window\.PENECHO_DRAW/);
   assert.match(validate, /acceptedTools = \["write_text", "draw_formula", "plot_function", "draw", "erase"\]/);
-  assert.match(validate, /c\.tool === "draw"[\s\S]*?DRAW\?\.normalize\(c, SIZE\)/);
+  assert.match(validate, /c\.tool === "draw"[\s\S]*?DRAW\?\.normalize\(c, WORLD_LIMIT\)/);
   assert.match(prepare, /c\.tool === "draw"[\s\S]*?DRAW\.render\(c, offscreen, c\.color\)/);
   assert.doesNotMatch(validate, /animate_scene/);
 });
@@ -430,14 +430,15 @@ test("client widget validation matches the server tolerance boundary", () => {
   const app = read("public/app.js"),
     server = read("src/server/main.js"),
     geometryGuide = vm.runInNewContext(`(${functionSource(app, "widgetGeometryForViewport")})`, { SIZE:20000 }),
-    fitGeometry = vm.runInNewContext(`(${functionSource(app, "fitWidgetGeometry")})`, { SIZE:20000, widgetGeometryForViewport:geometryGuide }),
-    resizeImage = vm.runInNewContext(`(${functionSource(app, "resizeImageBox")})`, { SIZE:20000 });
+    fitGeometry = vm.runInNewContext(`(${functionSource(app, "fitWidgetGeometry")})`, { SIZE:20000, WORLD_LIMIT:100000, widgetGeometryForViewport:geometryGuide }),
+    resizeImage = vm.runInNewContext(`(${functionSource(app, "resizeImageBox")})`, { SIZE:20000, WORLD_LIMIT:100000 });
   assert.deepEqual({ ...geometryGuide({ w:3000, h:3000 }).max }, { w:1500, h:1500 });
   assert.deepEqual({ ...geometryGuide({ w:3001, h:3001 }).max }, { w:2000, h:2000 });
   assert.deepEqual({ ...fitGeometry({ x:100, y:200, w:10000, h:20000 }, { w:10000, h:10000 }) }, { x:100, y:200, w:2500, h:5000 });
-  assert.deepEqual({ ...fitGeometry({ x:100, y:200, w:6800, h:2200 }, { w:10000, h:10000 }) }, { x:100, y:200, w:6800, h:2200 });
+  assert.deepEqual({ ...fitGeometry({ x:100, y:200, w:6800, h:2200 }, { w:10000, h:10000 }) }, { x:100, y:200, w:6800, h:2500 });
   assert.deepEqual({ ...fitGeometry({ x:100, y:200, w:8000, h:6000 }, { w:20000, h:20000 }) }, { x:100, y:200, w:7302, h:5477 });
-  assert.deepEqual({ ...fitGeometry({ x:30000, y:-500, w:2, h:3 }, { w:10000, h:10000 }) }, { x:19700, y:0, w:300, h:450 });
+  assert.deepEqual({ ...fitGeometry({ x:30000, y:-500, w:2, h:3 }, { w:10000, h:10000 }) }, { x:30000, y:-500, w:2500, h:2500 });
+  assert.deepEqual({ ...fitGeometry({ x:100, y:200, w:600, h:400 }, { w:10000, h:10000 }) }, { x:100, y:200, w:2500, h:2500 });
   assert.deepEqual({ ...resizeImage({ x:100, y:200, w:1200, h:800 }, { x:15100, y:10200 }, "resize") }, { x:100, y:200, w:15000, h:10000 });
   assert.doesNotMatch(functionSource(app, "resizeImageBox"), /5000|10000|40000000|maximumArea/);
   assert.doesNotMatch(functionSource(app, "resizeWidgetBox"), /5000|10000|40000000|maximumArea/);
@@ -480,6 +481,8 @@ test("new canvases open 1.5 times closer without overriding restored views", () 
     fit = vm.runInNewContext(`(${fitSource})`, {
       INITIAL_VIEW_ZOOM:1.5,
       SIZE:20000,
+      MIN_ZOOM:0.1,
+      MAX_ZOOM:4,
       devicePixelRatio:1,
       view:{ getBoundingClientRect:() => ({ width:1200, height:800 }) },
       screen,
@@ -497,7 +500,7 @@ test("new canvases open 1.5 times closer without overriding restored views", () 
   assert.equal(state.panX + 10000 * state.scale, 600);
   assert.equal(state.panY + 10000 * state.scale, 400);
   assert.match(functionSource(persistence, "startBlankCanvas"), /state\.viewInitialized\s*=\s*false;[\s\S]*?fit\(\)/);
-  assert.match(persistence, /state\.scale\s*=\s*Math\.max\(0\.01,\s*Math\.min\(2,\s*item\.view\.scale\)\)/);
+  assert.match(persistence, /state\.scale\s*=\s*Math\.max\(MIN_ZOOM,\s*Math\.min\(MAX_ZOOM,\s*item\.view\.scale\)\)/);
 });
 
 test("animation defaults on without overriding an explicitly disabled plugin choice", () => {
@@ -645,7 +648,7 @@ test("animation drafts play immediately and share playback controls with confirm
 test("live widgets use native canvas chrome, state-aware iframe gestures, and three resize modes", () => {
   const app = read("public/app.js"),
     css = read("public/style.css"),
-    resize = vm.runInNewContext(`(${functionSource(app, "resizeWidgetBox")})`, { SIZE:20000 }),
+    resize = vm.runInNewContext(`(${functionSource(app, "resizeWidgetBox")})`, { SIZE:20000, WORLD_LIMIT:20000 }),
     start = { x:100, y:200, w:1200, h:800, contentW:1200, contentH:800 },
     width = resize(start, { x:2000, y:0 }, "width"),
     height = resize(start, { x:0, y:1300 }, "height"),
@@ -1244,8 +1247,8 @@ test("text tool toggles a real MD+TeX preview and confirms the unchanged source"
   assert.match(confirm, /return await commitPromise/);
   assert.match(confirm, /proposedFontSize = editor\.fontCss \/ Math\.max\(0\.03, state\.scale\)/);
   assert.match(confirm, /fittedTextBoxContent\(text, fontSize, color, maxWidth\)/);
-  assert.match(confirm, /Math\.min\(SIZE - width, x\)/);
-  assert.match(confirm, /Math\.min\(SIZE - height, y\)/);
+  assert.match(confirm, /Math\.min\(WORLD_LIMIT - width, x\)/);
+  assert.match(confirm, /Math\.min\(WORLD_LIMIT - height, y\)/);
   assert.match(confirm, /state\.textBoxes\.splice\(existingIndex, 1, item\)[\s\S]*?state\.textBoxes\.push\(item\)/);
   assert.doesNotMatch(confirm, /blitSized\(|retainSharpOverlay\(/);
   assert.match(app, /function editTextBox\(item\)/);
@@ -1501,6 +1504,7 @@ test("AI write_text validates and rasterizes the same 1000 characters", () => {
     raster = vm.runInNewContext(`(${rasterSource})`, {
       AI_TEXT_MAX_LENGTH: 1000,
       SIZE: 20000,
+      WORLD_LIMIT: 100000,
       state: { aiFont: "system-ui" },
       rasterScaleFor: vm.runInNewContext(`(${rasterScaleSource})`),
       offscreen: () => ({ getContext: () => ({}) }),
@@ -1522,7 +1526,7 @@ test("AI text and formula drafts expose copy and axis-resize controls", () => {
   const app = read("public/app.js"),
     css = read("public/style.css"),
     zh = read("public/locales/zh.js"),
-    points = vm.runInNewContext(`(${functionSource(app, "draftActionPoints")})`, { SIZE: 20000 }),
+    points = vm.runInNewContext(`(${functionSource(app, "draftActionPoints")})`, { SIZE: 20000, WORLD_LIMIT: 100000 }),
     copyTextForCommand = vm.runInNewContext(`(${functionSource(app, "copyTextForCommand")})`),
     draw = functionSource(app, "drawPending"),
     drawBatch = functionSource(app, "drawPendingBatch"),
@@ -1531,7 +1535,7 @@ test("AI text and formula drafts expose copy and axis-resize controls", () => {
     prepare = functionSource(app, "preparePendingItem"),
     update = functionSource(app, "updatePendingGesture");
   const box = { x: 100, y: 120, w: 300, h: 180 },
-    edge = points({ x: 0, y: 0, w: 300, h: 180 }, 14, true, true),
+    edge = points({ x: 0, y: -100000, w: 300, h: 180 }, 14, true, true),
     radius = 14 * 0.54;
 
   assert.equal(copyTextForCommand({ tool: "write_text", text: "copy me" }), "copy me");
@@ -1542,8 +1546,8 @@ test("AI text and formula drafts expose copy and axis-resize controls", () => {
   assert.deepEqual(Object.keys(points(box, 14, false)).sort(), ["item-accept", "item-cancel"]);
   assert.deepEqual(Object.keys(points(box, 14, true)).sort(), ["item-accept", "item-cancel", "item-copy"]);
   assert.equal(points(box, 14, true, true).copy.x, box.x + box.w / 2);
-  assert.ok(edge.copy.y > 0 && edge.copy.y >= radius);
-  assert.ok(Object.values(edge).every((point) => point.x >= radius && point.x <= 20000 - radius));
+  assert.ok(edge.copy.y > -100000 && edge.copy.y >= -100000 + radius);
+  assert.ok(Object.values(edge).every((point) => point.x >= -100000 + radius && point.x <= 100000 - radius));
   assert.match(draw, /if \(p\.textCommand\) drawTextDraftSurface\(ctx, b\)/);
   assert.doesNotMatch(draw, /drawDraftActions/);
   assert.match(draw, /b\.x \+ b\.w \+ s \* 0\.08/);
@@ -1752,7 +1756,7 @@ test("batch drafts paint every body before selected feedback", () => {
 
 test("batch draft action controls provide a 44px touch target", () => {
   const app = read("public/app.js"),
-    points = vm.runInNewContext(`(${functionSource(app, "draftActionPoints")})`, { SIZE: 20000 }),
+    points = vm.runInNewContext(`(${functionSource(app, "draftActionPoints")})`, { SIZE: 20000, WORLD_LIMIT: 100000 }),
     hit = vm.runInNewContext(`(${functionSource(app, "pendingHit")})`, {
       clientPoint: (event) => event,
       draftActionPoints: points,

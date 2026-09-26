@@ -55,6 +55,7 @@ test("Typeset placement translates a mixed tool group without changing relative 
   const server = fs.readFileSync(path.join(ROOT, "src", "server", "main.js"), "utf8"),
     translate = vm.runInNewContext(`(${functionSource(server, "translateTypesetGroup")})`, {
       CANVAS_SIZE: 20000,
+      CANVAS_LIMIT: 100000,
       Number,
       Math,
       overlaps:(a,b)=>a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y,
