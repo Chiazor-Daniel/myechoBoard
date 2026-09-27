@@ -113,7 +113,7 @@ const DIAGRAM_SOURCE_FORMAT_ALIASES = new Map([
   ["cytoscape-json", "cytoscape-json"],
   ["cytoscape-elements-json", "cytoscape-json"],
 ]);
-const WIDGET_RENDERING_POLICY = "An html_widget is direct content on a zoomable canvas, not a dashboard card. Layout and typography must be designed together for the widget's declared width and height. Use responsive sizing, such as clamp() with container- or viewport-relative units, and maintain a clear but restrained visual hierarchy. Width-only or height-only resizing changes the layout viewport: reflow or regroup for its new aspect ratio instead of merely scaling a fixed-size wide or tall scene, and keep SVG or professional-graphic bounds tight on every side with only slight padding. Primary content should be prominent without crowding the layout; body text and labels must remain comfortably readable at normal canvas scale. Unless the user requests otherwise, use roughly clamp(36px,1.2cqw,52px) for body text, at least 28px for secondary text, and clamp(52px,2cqw,80px) for headings; these are zoomable-canvas widget pixels, so ordinary browser defaults such as 14–16px are too small. Do not fix overflow by making text excessively small, and do not use oversized text that causes wrapping, clipping, overlap, or wasted space. Prefer reflowing, regrouping, shortening secondary copy, or choosing a more appropriate widget size. Before returning, verify the longest labels and every section at the actual widget dimensions. For SVG, size text relative to its viewBox, not browser defaults. Keep html, body, and the outermost layout transparent, with no outer background, border, corner radius, or box shadow, so the result blends into the canvas. Keep user-facing text natively selectable and do not globally disable text selection. Use high-contrast text and avoid dense tables, tiny legends, and decorative chrome.";
+const WIDGET_RENDERING_POLICY = "An html_widget is direct content on a zoomable canvas, not a dashboard card. Layout and typography must be designed together for the widget's declared width and height. Use responsive sizing, such as clamp() with container- or viewport-relative units, and maintain a clear but restrained visual hierarchy. Width-only or height-only resizing changes the layout viewport: reflow or regroup for its new aspect ratio instead of merely scaling a fixed-size wide or tall scene, and keep SVG or professional-graphic bounds tight on every side with only slight padding. Primary content should be prominent without crowding the layout; body text and labels must remain comfortably readable at normal canvas scale. Unless the user requests otherwise, use roughly clamp(36px,1.2cqw,52px) for body text, at least 28px for secondary text, and clamp(52px,2cqw,80px) for headings; these are zoomable-canvas widget pixels, so ordinary browser defaults such as 14–16px are too small. Do not fix overflow by making text excessively small, and do not use oversized text that causes wrapping, clipping, overlap, or wasted space. Prefer reflowing, regrouping, shortening secondary copy, or choosing a more appropriate widget size. Before returning, verify the longest labels and every section at the actual widget dimensions. For SVG, size text relative to its viewBox, not browser defaults. Keep html, body, and the outermost layout transparent, with no outer background, border, corner radius, or box shadow, so the result blends into the canvas. Keep user-facing text natively selectable and do not globally disable text selection. Use high-contrast text and avoid dense tables, tiny legends, and decorative chrome. Write subscripts, superscripts, and symbols with real characters only: Unicode subscript or superscript digits such as ₂ and ², HTML sub or sup, or SVG tspan with baseline-shift and a smaller font-size. Never use accented letters such as ã, â, or ä, or punctuation such as „ or ‚, in place of subscripts, and never emit truncated or partial multi-byte characters.";
 const PLUGIN_AUTHORING_SYSTEM = `You edit one PenEcho plugin capability contract written as Markdown with YAML frontmatter. The document and its optional plugin CSS are injected into the canvas model only while that plugin is enabled; they tell the model when the capability applies, what data and base components are available, and how to return exactly one html_widget command. The browser, not PenEcho, executes generated HTML in a sandbox. PenEcho supplies a read-only window.penechoFetchPublic(url) channel for bounded public HTTPS GET responses that browser CORS blocks, including APIs, feeds, and images; it never supplies credentials or an HTML template.
 
 Return only a JSON object with exactly two string fields: "document" and "styles". Do not add fences or commentary. document is the complete improved plugin Markdown, starts with a YAML --- line, stays under 12000 UTF-8 bytes, and does not include a full HTML example. styles is the complete optional plugin CSS, stays under 32000 UTF-8 bytes, and must not contain style tags, @import, or url(). Preserve useful existing CSS; add or change CSS only when reusable base components, variables, or a coherent visual language materially improve the capability. Preserve a valid existing id when possible. Required frontmatter: penecho-plugin: 1, lowercase kebab-case id, English name, version, concise description, category, source, connect as a YAML list of zero to eight exact HTTPS data origins, and recommended-refresh-seconds from 60 to 86400. Use a bare connect: line for no data API. Prefer public browser-CORS APIs that need no key; never invent credentials, hide a proxy, or claim an API is reliable when uncertain.
@@ -1085,7 +1085,18 @@ function extractJson(text) {
     .replace(/<\/?(?:thinking|tischer|reasoning)[^>]*>/gi,"")
     .replace(/^\s*(?:\\?thinking|reasoning)\s*\n[\s\S]*?\n\s*\n/,"")
     .trim();
-  const fenced=cleaned.match(/```(?:json)?\s*([\s\S]*?)```/i),source=fenced?fenced[1]:cleaned;
+  const fenced=cleaned.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  // Models emit LaTeX and symbols inside JSON strings without escaping
+  // backslashes: \x2b, \text, \frac, \rightleftharpoons, \underline. \xHH is
+  // never valid JSON, and \t \r \b \f \u before a letter parse "successfully"
+  // but silently corrupt the text into tab/formfeed/backspace characters or
+  // bad \u escapes. Rewrite them to escaped backslashes (and \xHH to \u00HH)
+  // so the whole response survives instead of a fragment without commands.
+  let source=fenced?fenced[1]:cleaned;
+  source=source
+    .replace(/(?<!\\)\\x([0-9a-fA-F]{2})/g,"\\u00$1")
+    .replace(/(?<!\\)\\([tbrfu])(?=[a-zA-Z])/g,"\\\\$1")
+    .replace(/(?<!\\)\\(?=[^"\\\/bfnrtu])/g,"\\\\");
   // Try each balanced `{...}` candidate and return the first valid JSON object.
   let scan=source.indexOf("{");
   while(scan>=0){
@@ -1476,7 +1487,8 @@ function responsePlacement(changedBox) {
   return {right,below,instruction:"For an unfinished expression ending in =, append only the missing result at right.x/right.y. For longer prose use below.x/below.y. Do not rewrite the user's entire expression."};
 }
 const REINSPECTION_RETRY = "Perform a second independent inspection. Use focusInset as the primary transcription view when present, especially for Chinese handwriting, then cross-check latestInput.imageRect. Inspect any box/circle-selected content and arrow chain it visually references outside that rectangle. Follow the final arrowhead as the intended destination. Every write_text command must include finite global x and y for its top-left start plus a finite maxWidth chosen from the available blank space.",
-  MANUAL_EMPTY_RETRY = `${REINSPECTION_RETRY} The manual response was empty; prior transcription may be wrong. If there is new input, fulfill modelInput.userAction or ask one brief clarification question with write_text. Use none only when there is no new input.`;
+  MANUAL_EMPTY_RETRY = `${REINSPECTION_RETRY} The manual response was empty; prior transcription may be wrong. If there is new input, fulfill modelInput.userAction or ask one brief clarification question with write_text. Use none only when there is no new input.`,
+  CORRUPTED_TEXT_RETRY = "Your previous response contained corrupted characters: accented letters or punctuation such as ã, â, „, or ‚ used in place of subscripts or symbols, usually from truncated Unicode. Re-emit every affected label cleanly. Write chemical formulas and math with proper Unicode subscript or superscript digits such as ₂ and ², HTML <sub> or <sup>, or SVG <tspan> with baseline-shift and a smaller font-size, and plain characters such as ° for degrees. Never use diacritic letters or CJK punctuation as subscripts, and never emit partial multi-byte characters.";
 function normalizeMathText(value) { return String(value||"").replace(/\\left|\\right/g,"").replace(/\s+/g,"").replace(/[{}]/g,""); }
 const HIGH_LATIN_CHAR = /[\u0081-\u00FF\u02C6\u2019\u201C\u201D\u2013\u2014\u20AC\u0161\u017D\u017E\u0178\u201A\u0192\u201E\u2020\u2021\u02DC\u2122\u203A\u00AB\u00BB]/,
   UTF8_REPAIR_DECODER = new TextDecoder("utf-8", { fatal:true }),
@@ -1737,6 +1749,21 @@ function hasInvalidDrawCommand(result){
 }
 function filterInvalidDrawCommands(commands){
   return commands.filter(command=>command?.tool!=="draw"||DRAW.normalize(command,CANVAS_LIMIT));
+}
+// Subscript corruption the UTF-8 repair cannot fix: the model emits a lead byte
+// followed by a continuation byte as literal characters ("ã„", "â‚") instead of
+// the intended subscript. A char from the UTF-8 lead-byte range (Â..ó) directly
+// followed by a continuation-style char is that signature. Common legitimate
+// punctuation (dashes, quotes, ellipsis, trademark) is excluded so real phrases
+// like "café—style" never look corrupted.
+const CORRUPTED_TEXT_PATTERN = /[\u00C2-\u00F3](?:[\u0080-\u009F\u00A0-\u00BF\u201A\u201E\u2030\u02C6\u2039\u0152\u2020\u2021\u02DC\u0161\u203A\u0153\u017E\u0178\u20AC])/;
+function hasCorruptedWidgetText(result) {
+  return result.commands.some(command => {
+    const tool = command?.tool || command?.type || command?.name;
+    if (!["html_widget", "diagram_source", "write_text", "draw_formula", "plot_function"].includes(tool)) return false;
+    return [command.html, command.text, command.latex, command.copyText, command.expression]
+      .some(value => typeof value === "string" && CORRUPTED_TEXT_PATTERN.test(value));
+  });
 }
 function hasVisualCommand(result){
   return result.commands.some(command=>["plot_function","draw","html_widget","diagram_source"].includes(command?.tool||command?.type||command?.name));
@@ -2338,11 +2365,11 @@ const server = http.createServer(async (req, res) => {
       saveLatestModelExchange(requestId,attempts,modelInput,"",model);
       const pluginCommandContext={changedBox:payload.changedBox,widgetEdit:payload.widgetEdit};
       model.result.commands=filterWidgetEditCommands(filterCapabilityCommands(normalizeCommands(model.result),payload.animationEnabled,payload.plugins,Boolean(payload.widgetEdit),modelInput.widgetGeometry,pluginCommandContext),payload.widgetEdit);
-      const invalidTextLayout=hasInvalidTextLayout(model.result),invalidDraw=hasInvalidDrawCommand(model.result),manualEmpty=payload.userAction!=="auto"&&commandsForAction(model.result,payload.userAction).length===0,plotMissing=payload.userAction==="plot"&&!hasVisualCommand(model.result);
-      if(payload.userAction!=="normalize"&&(invalidTextLayout||invalidDraw||manualEmpty||plotMissing)){
-        const reason=invalidTextLayout?"invalid-text-layout":invalidDraw?"invalid-draw-command":manualEmpty?"empty-commands":"plot-without-visual";
+      const invalidTextLayout=hasInvalidTextLayout(model.result),invalidDraw=hasInvalidDrawCommand(model.result),manualEmpty=payload.userAction!=="auto"&&commandsForAction(model.result,payload.userAction).length===0,plotMissing=payload.userAction==="plot"&&!hasVisualCommand(model.result),corruptedText=hasCorruptedWidgetText(model.result);
+      if(payload.userAction!=="normalize"&&(invalidTextLayout||invalidDraw||manualEmpty||plotMissing||corruptedText)){
+        const reason=invalidTextLayout?"invalid-text-layout":invalidDraw?"invalid-draw-command":manualEmpty?"empty-commands":corruptedText?"corrupted-text":"plot-without-visual";
         log({type:"ai-retry",requestId,ip,action:payload.userAction,reason});
-        const retry=invalidDraw?"Your previous response contained a draw command that PenEcho cannot render. Rebuild it once and verify that types and items have equal lengths, every coordinate is an integer, each item matches the documented native draw encoding, and all geometry stays inside the canvas. Keep native draw to about 10 or fewer basic primitives or line segments; use General HTML SVG instead if the visual is larger or dynamic.":plotMissing?"Perform a second independent inspection using focusInset for transcription if available. The user explicitly selected plot. Return at least one renderable visual command. For a single-variable function, return plot_function with an ASCII expression using explicit multiplication such as 3*x. For another visual, use native draw only when it is a very simple static sketch of about 10 or fewer basic primitives or line segments; otherwise return one General HTML html_widget with inline SVG. Do not answer with prose or draw_formula alone.":manualEmpty?MANUAL_EMPTY_RETRY:REINSPECTION_RETRY;
+        const retry=invalidDraw?"Your previous response contained a draw command that PenEcho cannot render. Rebuild it once and verify that types and items have equal lengths, every coordinate is an integer, each item matches the documented native draw encoding, and all geometry stays inside the canvas. Keep native draw to about 10 or fewer basic primitives or line segments; use General HTML SVG instead if the visual is larger or dynamic.":plotMissing?"Perform a second independent inspection using focusInset for transcription if available. The user explicitly selected plot. Return at least one renderable visual command. For a single-variable function, return plot_function with an ASCII expression using explicit multiplication such as 3*x. For another visual, use native draw only when it is a very simple static sketch of about 10 or fewer basic primitives or line segments; otherwise return one General HTML html_widget with inline SVG. Do not answer with prose or draw_formula alone.":manualEmpty?MANUAL_EMPTY_RETRY:corruptedText?CORRUPTED_TEXT_RETRY:REINSPECTION_RETRY;
         model=await requestModel(retry);
         if (LOCAL_CLI) ensureCurrentLocalRequest(localRun);
         saveLatestModelExchange(requestId,attempts,modelInput,retry,model);
