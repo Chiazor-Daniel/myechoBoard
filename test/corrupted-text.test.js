@@ -53,3 +53,8 @@ test("other tools and non-string fields are ignored", () => {
   assert.equal(hasCorruptedWidgetText({ commands: [{ tool: "write_text", text: "clean" }, { tool: "draw", html: "Hã„" }] }), false);
   assert.equal(hasCorruptedWidgetText({ commands: [{ tool: "html_widget", html: null }] }), false);
 });
+
+test("diagram_source source text is scanned too", () => {
+  assert.equal(hasCorruptedWidgetText({ commands: [{ tool: "diagram_source", source: 'flowchart LR\nA["2 Hã„O"] --> B' }] }), true);
+  assert.equal(hasCorruptedWidgetText({ commands: [{ tool: "diagram_source", source: 'flowchart LR\nA["H₂O"] --> B' }] }), false);
+});

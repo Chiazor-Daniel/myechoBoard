@@ -1761,7 +1761,7 @@ function hasCorruptedWidgetText(result) {
   return result.commands.some(command => {
     const tool = command?.tool || command?.type || command?.name;
     if (!["html_widget", "diagram_source", "write_text", "draw_formula", "plot_function"].includes(tool)) return false;
-    return [command.html, command.text, command.latex, command.copyText, command.expression]
+    return [command.html, command.text, command.latex, command.copyText, command.expression, command.source]
       .some(value => typeof value === "string" && CORRUPTED_TEXT_PATTERN.test(value));
   });
 }
